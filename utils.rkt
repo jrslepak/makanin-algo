@@ -1,7 +1,18 @@
 #lang racket
 
-(provide nondecreasing? 
-         sym-counts/flat sym-counts)
+(provide leftmost rightmost
+         nondecreasing? 
+         sym-counts/flat sym-counts
+         remove-consecutive-duplicates
+         interval-overlap?
+         interval-join
+         merge-intervals)
+(module+ test (require rackunit))
+
+;;; Leftmost element of a boundary sequence
+(define (leftmost xs) (for/first ([x xs]) x))
+;;; Rightmost element of a boundary sequence
+(define (rightmost xs) (for/last ([x xs]) x))
 
 ;;; Check whether a list's elements only increase
 (define (nondecreasing? xs)
@@ -25,3 +36,62 @@
   (for/fold ([c counts])
             ([eqn eqns])
     (sym-counts/flat eqn c)))
+
+;;; Skip the first chunk of contiguous stream elements that match a predicate
+(define (stream-skip pred xs)
+  (cond [(stream-empty? xs) xs]
+        [(pred (stream-first xs))
+         (stream-skip pred (stream-rest xs))]
+        [else xs]))
+
+;;; Drop consecutive occurrences of "equal" items in a list
+(define (remove-consecutive-duplicates xs [eqfn equal?])
+  (define (rcd xstream)
+    (cond [(stream-empty? xstream) xstream]
+          [else
+           (stream-cons
+            (stream-first xstream)
+            (rcd (stream-skip (λ (x) (eqfn x (stream-first xstream)))
+                              (stream-rest xstream))))]))
+  (rcd (sequence->stream xs)))
+
+;;; Do two closed intervals (sequences of endpoints) overlap?
+;;; [Sequence-of Nat] [Sequence-of Nat] -> Boolean
+(define (interval-overlap? i1 i2)
+  (define left1 (for/first ([b i1]) b))
+  (define right1 (for/last ([b i1]) b))
+  (define left2 (for/first ([b i2]) b))
+  (define right2 (for/last ([b i2]) b))
+  (or (<= left1 left2 right1)
+      (<= left1 right2 right1)
+      (<= left2 left1 right2)
+      (<= left2 right1 right2)))
+
+;;; Find the smallest closed interval that completely covers the two given
+;;; closed intervals
+(define (interval-join i1 i2)
+  (vector (min (for/first ([b i1]) b) (for/first ([b i2]) b))
+          (max (for/last ([b i1]) b) (for/last ([b i2]) b))))
+
+;;; Given a sequence of closed intervals, merge consecutive ranges that overlap
+;;; to produce a sequence of disjoint intervals with the same union
+;;; [Stream-of [Vector-of Nat]] -> [Stream-of [Vector-of Nat]]
+(define (merge-intervals intervals)
+  (define (merge* r)
+    (cond [(stream-empty? r) r]
+          [(stream-empty? (stream-rest r)) r]
+          [(interval-overlap? (stream-ref r 0) (stream-ref r 1))
+           (merge* (stream-cons
+                    (interval-join (stream-ref r 0)
+                                   (stream-ref r 1))
+                    (stream-tail r 2)))]
+          [else (stream-cons (stream-first r)
+                             (merge* (stream-rest r)))]))
+  (merge* (sequence->stream intervals)))
+
+(module+ test
+  (check-equal? (stream->list
+                 (merge-intervals
+                  (list #(0 2) #(1 5) #(6 8) #(10 11))))
+                '(#(0 5) #(6 8) #(10 11))))
+

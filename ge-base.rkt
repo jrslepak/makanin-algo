@@ -4,23 +4,47 @@
 (module+ test (require rackunit))
 
 (provide (struct-out svar)
+         (struct-out gvar)
          gconst? word?
+         label-<
          gconst-labels svar-labels
          (struct-out ge-base)
          ge-base-clone
-         gconst-base gconst-base? svar-base?
+         gconst-base
+         gconst-base? gvar-base? svar-base? generator-base?
          left-bound right-bound
          crosses-boundary?
          column? empty-col? indecomposable?
          ge-<= ge-min largest-leftmost)
  
-;; A GConst (generator constant) is a Nat
+;;; A GConst (generator constant) is a Nat
 (define (gconst? n) (natural? n))
-;; An SVar (sequence variable) is an (svar symbol)
+;;; A GVar (generator variable) is a (gvar symbol)
+(define-struct/contract gvar
+  ([name symbol?])
+  #:transparent)
+;;; An SVar (sequence variable) is an (svar symbol)
 (define-struct/contract svar
   ([name symbol?])
   #:transparent)
-;; A Word is a [List [U GConst Var]]
+;;; Ordering on GConsts, GVars, and SVars.
+;;; any GConst < any GVar < any SVar
+;;; Within each class, ties are resolved by numeric or lexical comparison
+(define (label-< x y)
+  (cond [(and (gconst? x) (gconst? y))
+         (< x y)]
+        [(and (svar? x) (svar? y))
+         (symbol<? (svar-name x) (svar-name y))]
+        [(and (gvar? x) (gvar? y))
+         (symbol<? (gvar-name x) (gvar-name y))]
+        [(gconst? x) #t]
+        [(gvar? x) (svar? y)]
+        [else #f]))
+
+;;; A Word is a [List [U GConst SVar]]
+;;; Since this represents a fragment of an equation, we exclude GVars. They are
+;;; only to be introduced into a generalized equation (generated after an
+;;; alignment is chosen).
 (define word? (listof (or/c gconst? svar?)))
 
 (module+ test
@@ -29,7 +53,8 @@
   (for-each check-false
             (list (gconst? -2) (gconst? (svar 'f)) (svar? 0) (svar? 9) (svar? -2)))
   (check-true (word? (list 1 (svar 's) 4 (svar 'w))))
-  (check-false (word? (list 6 (svar 'a) -4))))
+  (check-false (word? (list 6 (svar 'a) -4)))
+  (check-false (word? (list 1 (svar 's) 4 (gvar 'w)))))
 
 
 ;;; A Generalized Equation Base ("GE Base") is one of
@@ -37,7 +62,7 @@
 ;;; - (ge-base Var [List-of Nat])  where the list is nondecreasing
 ;;;     and has length >= 2
 (define-struct/contract ge-base
-  ([label (or/c gconst? svar?)]
+  ([label (or/c gconst? svar? gvar?)]
    [boundaries (and/c (vectorof natural? #:immutable #f) nondecreasing?)])
   #:transparent)
 (define (ge-base-clone base)
@@ -51,9 +76,12 @@
 (module+ test (check-equal? (gconst-base 5 0) (ge-base 5 (vector 0 1))))
 
 
-;;; Does this base have a constant label? variable lable?
+;;; Does this base have a constant label? seq var label? gen var label?
 (define (gconst-base? b) (and (ge-base? b) (gconst? (ge-base-label b))))
 (define (svar-base? b) (and (ge-base? b) (svar? (ge-base-label b))))
+(define (gvar-base? b) (and (ge-base? b) (gvar? (ge-base-label b))))
+(define (generator-base? b) (or (gconst-base? b) (gvar-base? b)))
+
 
 (module+ test
   (check-true (gconst-base? (gconst-base 5 0)))
@@ -63,8 +91,10 @@
 
 
 ;;; Identify the outermost boundaries of a GE Base
-(define (left-bound geb) (for/first ([b (ge-base-boundaries geb)]) b))
-(define (right-bound geb) (for/last ([b (ge-base-boundaries geb)]) b))
+(define (left-bound geb) (leftmost (ge-base-boundaries geb))
+  #;(for/first ([b (ge-base-boundaries geb)]) b))
+(define (right-bound geb) (rightmost (ge-base-boundaries geb))
+  #;(for/last ([b (ge-base-boundaries geb)]) b))
 
 (module+ test
   (check-equal? (left-bound (ge-base (svar 'r) (vector 3 5 8 13))) 3)

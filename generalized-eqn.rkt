@@ -23,6 +23,8 @@
                     [result (listof ge-base?)])]
   [eqn->ge-list (-> word? word?
                     ge?)]
+  [geqn-columns (-> ge? (listof natural?))]
+  [new-gvars (-> ge? (hash/c symbol? natural?))]
   [carrier (-> ge? ge-base?)]
   [critical-boundary (-> ge? natural?)]
   [transport-bases (-> ge? (listof ge-base?))]
@@ -40,7 +42,7 @@
 ;;; boundaries (i.e., no single-use variables)
 ;;; TODO: is there a good way to mandate "no aliasing" within the list?
 (define (ge? l)
-  (and ((listof ge-base?) l)
+  (and ((non-empty-listof ge-base?) l)
        (let ([seq-vars (for/list ([base l]
                                   #:when (svar-base? base))
                                  (svar-name (ge-base-label base)))])
@@ -74,11 +76,12 @@
       (syntax->datum #'(boundary ...))))]))
 (define-syntax (ge stx)
   (syntax-parse stx
-    ;; If we have only "literals"
+    ;; If we have a "literal"
     [(_ b:ge-base-literal more ...)
      #'(cons (literal->ge-base b) (ge more ...))]
-    [(_ [label (left right)] ...)
-     #'(list (ge-base label (vector left right)) ...)]))
+    [(_ [label (left right)] more ...)
+     #'(cons (ge-base label (vector left right)) (ge more ...))]
+    [(_) #'(list)]))
 
 (module+ test
   (define GUTIERREZ-EXAMPLE-A
@@ -94,6 +97,137 @@
   (check-true (ge? (ge [(S a) (0 2)] [1 (2 3)]
                        [(S a) (0 2)] [(S b) (1 3)]
                        [2 (0 1)] [(S b) (1 3)]))))
+
+
+;;; The columns of a GE are the unit-separated pairs of boundaries located
+;;; between any GE base's leftmost and rightmost boundaries.
+;;; A column is represented by its left boundary.
+;;; GE -> [List-of natural]
+(define (geqn-columns ge)
+  (define sorted-bases (sort ge ge-<=))
+  (define base-spans (for/list ([b sorted-bases]) (ge-base-boundaries b)))
+  (define covered-intervals
+    (merge-intervals
+     (remove-consecutive-duplicates
+      base-spans
+      (λ (x y) (= (leftmost x) (leftmost y))))))
+  (apply append
+         (for/list ([interval covered-intervals])
+                   (stream->list (in-range (leftmost interval)
+                                           (rightmost interval))))))
+(module+ test
+  (check-equal? (geqn-columns (ge [(S a) (0 3)]))
+                '(0 1 2))
+  (check-equal? (geqn-columns (ge [1 (2 3)] [4 (5 6)]))
+                '(2 5))
+  (check-equal? (geqn-columns (ge [1 (2 3)] [4 (5 6)] [(S a) (2 6)]))
+                '(2 3 4 5)))
+
+
+;;; Identify which columns in a GE are not occupied by a generator base.
+;;; GE -> [List-of natural]
+(define (empty-columns ge)
+  (define generator-bases
+    (for/list ([base ge] #:when (generator-base? base)) base))
+  (define all-columns (geqn-columns ge))
+  (define occupied-columns
+    (sort (for/list ([gb generator-bases]) (left-bound gb)) <))
+  ;; Step through the two sorted lists of columns
+  (define (empty-columns* all occupied)
+    (cond [(empty? all)
+           ;; Nothing left to include
+           '()]
+          [(empty? occupied)
+           ;; No more exclusions, so keep everything that remains
+           all]
+          [(= (first all) (first occupied))
+           ;; This column is marked for exclusion
+           (empty-columns* (rest all) occupied)]
+          [(< (first all) (first occupied))
+           ;; Keep this column because it is farther left than
+           ;; the left-most excluded column
+           (cons (first all) (empty-columns* (rest all) occupied))]
+          [(> (first all) (first occupied))
+           ;; There might be a later exclusion which applies here,
+           ;; so defer decision on this column
+           (empty-columns* all (rest occupied))]))
+  (empty-columns* all-columns occupied-columns))
+
+(module+ test
+  ;; Include columns only covered by a sequence variable
+  (check-equal? (empty-columns (ge [(S a) (0 3)] [2 (4 5)]))
+                '(0 1 2))
+  ;; Exclude space between generator constants...
+  (check-equal? (empty-columns (ge [1 (1 2)] [2 (4 5)]))
+                '())
+  ;; ... unless that space is covered by a sequence variable.
+  (check-equal? (empty-columns (ge [1 (1 2)] [2 (4 5)] [(S q) (1 5)]))
+                '(2 3))
+  ;; When a GConst appears within an SVar, drop only that GConst's column
+  (check-equal? (empty-columns (ge [(S a) (0 4)] [2 (4 5)] [1 (1 2)]))
+                '(0 2 3)))
+
+
+;;; Given a GE, construct GVar entries (up to one per column) such that every
+;;; column will have at least one GVar or GConst base. Construct a hash which
+;;; associates each new GVar entry with its original column location.
+;;; GE -> [Hash-of Symbol Natural]
+(define (new-gvars ge)
+  (define worklist (empty-columns ge))
+  (for/hash ([column worklist])
+            ;; For debugging, it might be helpful to have a name that reflects
+            ;; which column this generator variable is meant to cover.
+            (define new-name
+              (gensym (string-append "col_" (number->string column) "_")))
+            (values new-name column)))
+
+(module+ test
+  ;; Extract the debug-friendly base that was used to generate the GVar's name
+  (define (collapse-gvar g)
+    (gvar (string->symbol
+           (first
+            (regexp-match
+             #rx"col_[0-9]*"
+             (symbol->string (gvar-name g)))))))
+  
+  (define NEWVARS-A (new-gvars GUTIERREZ-EXAMPLE-A))
+  (check-equal? (sort (hash-values NEWVARS-A) <)
+                '(1 5))
+  (define NEWVARS-B (new-gvars GUTIERREZ-EXAMPLE-B))
+  (check-equal? (sort (hash-values NEWVARS-B) <)
+                '(1 4 7)))
+
+
+;;; Append a collection of GVars specified in a hash to an existing GE.
+;;; [Hash-of Symbol Natural] GE -> GE
+(define (add-gvars vs ge)
+  (append
+   (sort (for/list ([(var col) vs])
+                   (ge-base (gvar var) (vector col (add1 col))))
+         ge-<=)
+   ge))
+
+(module+ test
+  (define (collapse-gvar-bases ge)
+    (for/list ([base ge])
+              (if (gvar-base? base)
+                  (ge-base (collapse-gvar (ge-base-label base))
+                           (ge-base-boundaries base))
+                  base)))
+  
+  (define PADDED-A (add-gvars NEWVARS-A GUTIERREZ-EXAMPLE-A))
+  (check-equal? (collapse-gvar-bases PADDED-A)
+                (ge [(gvar 'col_1) (1 2)]
+                    [(gvar 'col_5) (5 6)]
+                    [(S x) (1 2)] [1 (2 3)] [2 (3 4)] [(S y) (4 6)]
+                    [(S y) (1 3)] [2 (3 4)] [1 (4 5)] [(S x) (5 6)]))
+  (define PADDED-B (add-gvars NEWVARS-B GUTIERREZ-EXAMPLE-B))
+  (check-equal? (collapse-gvar-bases PADDED-B)
+                (ge [(gvar 'col_1) (1 2)]
+                    [(gvar 'col_4) (4 5)]
+                    [(gvar 'col_7) (7 8)]
+                    [(S x) (1 5)] [1 (5 6)] [2 (6 7)] [(S y) (7 8)]
+                    [(S y) (1 2)] [2 (2 3)] [1 (3 4)] [(S x) (4 8)])))
 
 
 ;;; Given a list of word components and a list of boundary locations, produce a
@@ -307,12 +441,18 @@
                           [2 (3 4)] [1 (5 6)])
                       ge-<=))
 
+  (define G1A (map ge-base-clone PADDED-A))
+  (define G1A/t1 (transport! G1A))
+  
+
   (define G2 (map ge-base-clone GUTIERREZ-EXAMPLE-B))
   (define G2/t1 (transport! G2))
   (check-equal? (sort G2/t1 ge-<=)
                 (sort (ge [1 (5 6)] [2 (6 7)] [(S y) (7 8)]
                           [(S y) (4 5)] [2 (5 6)] [1 (6 7)])
-                      ge-<=)))
+                      ge-<=))
+
+  (define G2A (map ge-base-clone PADDED-A)))
 
 
 ;;; Check whether a generalized equation has a contradiction: two constant
@@ -347,3 +487,37 @@
 (module+ test
   (check-false (geqn-solved? G1/t1))
   (check-true (geqn-solved? G1/t2)))
+
+
+;;; Given a solved generalized equation, identify which bases are located at
+;;; each column.
+;;; GE -> [Hash Natural [List-of [U GConst GVar]]]
+(define (generators-by-column ge)
+  (for/hash ([col (geqn-columns ge)])
+            (values col
+                    (for/list ([base ge]
+                               #:when (and (= col (left-bound base))
+                                           (generator-base? base)))
+                              (ge-base-label base)))))
+
+(module+ test
+  (define (summarize-gbc h)
+    (sort (for/list ([(k v) h])
+             (list k (sort (map (λ (x) (if (gvar? x) (collapse-gvar x) x)) v)
+                           label-<)))
+         (λ (x y) (< (first x) (first y)))))
+  (check-equal? (summarize-gbc (generators-by-column PADDED-A))
+   `([1 (,(gvar 'col_1))]
+     [2 (1)]
+     [3 (2 2)]
+     [4 (1)]
+     [5 (,(gvar 'col_5))]))
+  (check-equal? (summarize-gbc (generators-by-column PADDED-B))
+   `([1 (,(gvar 'col_1))]
+     [2 (2)]
+     [3 (1)]
+     [4 (,(gvar 'col_4))]
+     [5 (1)]
+     [6 (2)]
+     [7 (,(gvar 'col_7))])))
+
