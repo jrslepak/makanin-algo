@@ -5,7 +5,7 @@
 
 (provide (struct-out svar)
          (struct-out gvar)
-         gconst? word?
+         gconst? generator? word?
          label-<
          gconst-labels svar-labels
          (struct-out ge-base)
@@ -23,6 +23,8 @@
 (define-struct/contract gvar
   ([name symbol?])
   #:transparent)
+;;; A Generator is either a GConst or a GVar
+(define (generator? x) (or (gconst? x) (gvar? x)))
 ;;; An SVar (sequence variable) is an (svar symbol)
 (define-struct/contract svar
   ([name symbol?])

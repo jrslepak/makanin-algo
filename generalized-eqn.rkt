@@ -35,7 +35,10 @@
                    void?)]
   [transport! (-> ge? void?)]
   [geqn-contradiction? (-> ge? boolean?)]
-  [geqn-solved? (-> ge? boolean?)]))
+  [geqn-solved? (-> ge? boolean?)]
+  [generators-by-column (-> ge?
+                            (hash/c natural?
+                                    (listof generator?)))]))
 
 ;;; A Generalized Equation ("GE") is a list of GE Bases in which each sequence
 ;;; var is used as a label at least twice, in bases with the same number of
@@ -491,7 +494,11 @@
 
 ;;; Given a solved generalized equation, identify which bases are located at
 ;;; each column.
-;;; GE -> [Hash Natural [List-of [U GConst GVar]]]
+;;; The GBC hash of a GE's initial state can be used to construct the form of
+;;; each sequence variable's solution. The GBC of a GE after it has been solved
+;;; via transport! identifies the generator constant each generator must stand
+;;; for (if there are multiple distinct generators, we have a contradiction).
+;;; GE -> [Hash Natural [List-of Generator]]
 (define (generators-by-column ge)
   (for/hash ([col (geqn-columns ge)])
             (values col
