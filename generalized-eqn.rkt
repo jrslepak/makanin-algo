@@ -416,6 +416,8 @@
 ;;; other bases which overlap it. If there are only two occurrences of the
 ;;; carrier's variable in the generalized equation, remove both; otherwise,
 ;;; remove only the carrier.
+;;; Note: This makes the sometimes unsafe assumption that the carrier and target
+;;; bases cover the same number of columns.
 (define (transport! geqn)
   (define carr (carrier geqn))
   (define dual (earliest-duplicate carr geqn))
@@ -456,6 +458,30 @@
                       ge-<=))
 
   (define G2A (map ge-base-clone PADDED-A)))
+
+
+;;; Path-specified replacement for `transport!' procedure: instead of
+;;; automatically discovering the carrier/dual bases, takes the carrier base
+;;; and dual as arguemnts, along with a function for mapping from the carrier's
+;;; interval to the dual's interval.
+;;; Since this does not modify the GE in place, it may benefit from a fancier
+;;; persistent data structure.
+;;; GE GE-Base GE-Base [Natural -> Natural] -> GE
+(define (transport ge carrier dual translate)
+  ;; Check whether a base is entirely inside the moving zone
+  (define (moving? base)
+    (<= (left-bound carrier)
+        (left-bound base)
+        (right-bound base)
+        (right-bound carrier)))
+  ;; Construct a moved version of a base
+  (define (move base)
+    (ge-base (ge-base-label base)
+             (vector-map translate (ge-base-boundaries base))))
+  ;; Shift the bases which must move
+  (sort (for/list ([base ge])
+                  (if (moving? base) (move base) base))
+        ge-<=))
 
 
 ;;; Check whether a generalized equation has a contradiction: two constant
