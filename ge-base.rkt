@@ -3,19 +3,46 @@
 (require "utils.rkt")
 (module+ test (require rackunit))
 
-(provide (struct-out svar)
-         (struct-out gvar)
-         gconst? generator? word?
-         label-<
-         gconst-labels svar-labels
-         (struct-out ge-base)
-         ge-base-clone
-         gconst-base
-         gconst-base? gvar-base? svar-base? generator-base?
-         left-bound right-bound
-         crosses-boundary?
-         column? empty-col? indecomposable?
-         ge-<= ge-min largest-leftmost)
+(provide
+ (contract-out
+  (struct svar ([name symbol?]))
+  (struct gvar ([name symbol?]))
+  (gconst? contract?)
+  (generator? contract?)
+  (word? contract?)
+  (label-< (-> (or/c gconst? svar? gvar?)
+               (or/c gconst? svar? gvar?)
+               boolean?))
+  (gconst-labels (-> (listof ge-base?)
+                     (listof gconst?)))
+  (svar-labels (-> (listof ge-base?)
+                   (listof svar?)))
+  (struct ge-base ([label (or/c gconst? svar? gvar?)]
+                   [boundaries (and/c (vectorof natural? #:immutable #f)
+                                      nondecreasing?)]))
+  (ge-base-clone (-> ge-base?
+                     ge-base?))
+  (gconst-base (-> gconst? natural?
+                   ge-base?))
+  (gconst-base? contract?)
+  (gvar-base? contract?)
+  (svar-base? contract?)
+  (generator-base? contract?)
+  (left-bound (-> ge-base?
+                  natural?))
+  (right-bound (-> ge-base?
+                   natural?))
+  (crosses-boundary? (-> ge-base? natural?
+                         boolean?))
+  (column? contract?)
+  (empty-col? contract?)
+  (indecomposable? contract?)
+  (ge-<= (-> ge-base? ge-base?
+             boolean?))
+  (ge-min (-> ge-base? ge-base?
+              ge-base?))
+  (largest-leftmost (-> (sequence/c ge-base?)
+                        (or/c ge-base? false?)))))
  
 ;;; A GConst (generator constant) is a Nat
 (define (gconst? n) (natural? n))
@@ -93,10 +120,8 @@
 
 
 ;;; Identify the outermost boundaries of a GE Base
-(define (left-bound geb) (leftmost (ge-base-boundaries geb))
-  #;(for/first ([b (ge-base-boundaries geb)]) b))
-(define (right-bound geb) (rightmost (ge-base-boundaries geb))
-  #;(for/last ([b (ge-base-boundaries geb)]) b))
+(define (left-bound geb) (leftmost (ge-base-boundaries geb)))
+(define (right-bound geb) (rightmost (ge-base-boundaries geb)))
 
 (module+ test
   (check-equal? (left-bound (ge-base (svar 'r) (vector 3 5 8 13))) 3)
@@ -200,6 +225,7 @@
   (check-equal? (ge-min (ge-base (svar 'q) (vector 0 1))
                         (ge-base (svar 'q) (vector 0 2)))
                 (ge-base (svar 'q) (vector 0 2)))
+  (check-equal? (largest-leftmost '()) #f)
   (check-equal? (largest-leftmost (list (ge-base 3 (vector 0 1))
                                         (ge-base 3 (vector 1 2))
                                         (ge-base (svar 'w) (vector 2 4))
