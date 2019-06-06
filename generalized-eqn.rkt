@@ -481,22 +481,68 @@
     (ge-base (ge-base-label base)
              (vector-map fn (ge-base-boundaries base))))
   (sort 
+   ;; In either case, do not include the carrier in the final output.
    (if (<= (- (right-bound carrier) (left-bound carrier))
            (- (right-bound dual) (left-bound dual)))
        ;; Shift the moving bases
-       (for/list ([base ge])
+       (for/list ([base ge]
+                  #:when (not (eq? base carrier)))
                  (if (moving? base) (move base translate) base))
        ;; Expand the dual, shift all post-dual boundaries, and then shift
-       ;; the moving bases
+       ;; the moving bases.
        ;; All bases need to get shifted by the boundary translation function.
        ;; Moving bases must afterwards be shifted to the dual's new location.
-       (for/list ([base ge])
+       (for/list ([base ge]
+                  #:when (not (eq? base carrier)))
                  (if (moving? base)
                      (move (move base translate)
                              (λ (b) (+ b (- (translate (left-bound dual))
                                             (left-bound carrier)))))
                      (move base translate))))
    ge-<=))
+
+(module+ test
+  (define weird-example
+    (ge [(S x) (1 4)] [(S y) (4 6)] [(S x) (6 10)]
+        [(S y) (1 2)] [1 (2 3)] [(S z) (3 5)] [(S z) (5 7)]
+        [(S z) (7 9)] [1 (9 10)]))
+  (check-equal?
+   (let* ([c (carrier weird-example)]
+          [d (earliest-duplicate c weird-example)])
+     (for/list
+      ([fn (monotonic-maps/fn (left-bound c) (right-bound c)
+                              (left-bound d) (right-bound d))])
+      (transport weird-example c d fn)))
+   (list (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
+             [(S x) (6 10)] [(S y) (6 8)] [(S z) (7 9)]
+             [1 (8 9)] [1 (9 10)])
+         (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
+             [(S x) (6 10)] [(S y) (6 7)] [(S z) (7 9)]
+             [1 (7 9)] [1 (9 10)])
+         (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
+             [(S x) (6 10)] [(S y) (6 7)] [(S z) (7 9)]
+             [1 (7 8)] [1 (9 10)])))
+  (define reversed-example
+    (ge [(S x) (1 6)] [(S y) (6 8)] [(S x) (8 10)]
+        [(S y) (1 2)] [1 (2 3)] [(S z) (3 5)] [(S z) (5 7)]
+        [(S z) (7 9)] [1 (9 10)]))
+  (check-equal?
+   (let* ([c (carrier reversed-example)]
+          [d (earliest-duplicate c reversed-example)])
+     (for/list
+      ([fn (monotonic-maps/fn
+            (left-bound d) (right-bound d)
+            (left-bound d) (+ (left-bound d)
+                              (- (right-bound c) (left-bound c))))])
+      (transport reversed-example c d fn)))
+   (list (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 12)] [(S x) (8 13)]
+             [(S y) (8 9)] [1 (9 10)] [(S z) (10 12)] [1 (12 13)])
+         (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 11)] [(S x) (8 13)]
+             [(S y) (8 9)] [1 (9 10)] [(S z) (10 12)] [1 (11 13)])
+         (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 10)] [(S x) (8 13)]
+             [(S y) (8 9)] [1 (9 10)]  [1 (10 13)] [(S z) (10 12)])
+         (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 9)] [(S x) (8 13)]
+             [(S y) (8 9)] [1 (9 13)] [1 (9 10)] [(S z) (10 12)]))))
 
 
 ;;; Check whether a generalized equation has a contradiction: two constant
