@@ -462,8 +462,10 @@
 
 ;;; Path-specified replacement for `transport!' procedure: instead of
 ;;; automatically discovering the carrier/dual bases, takes the carrier base
-;;; and dual as arguemnts, along with a function for mapping from the carrier's
-;;; interval to the dual's interval.
+;;; and dual as arguemnts, along with a function which either maps from the
+;;; carrier's interval to the dual's interval (if the dual is at least as wide
+;;; as the carrier) or expands the dual's interval (if the dual is narrower than
+;;; the carrier).
 ;;; Since this does not modify the GE in place, it may benefit from a fancier
 ;;; persistent data structure.
 ;;; GE GE-Base GE-Base [Natural -> Natural] -> GE
@@ -475,13 +477,26 @@
         (right-bound base)
         (right-bound carrier)))
   ;; Construct a moved version of a base
-  (define (move base)
+  (define (move base fn)
     (ge-base (ge-base-label base)
-             (vector-map translate (ge-base-boundaries base))))
-  ;; Shift the bases which must move
-  (sort (for/list ([base ge])
-                  (if (moving? base) (move base) base))
-        ge-<=))
+             (vector-map fn (ge-base-boundaries base))))
+  (sort 
+   (if (<= (- (right-bound carrier) (left-bound carrier))
+           (- (right-bound dual) (left-bound dual)))
+       ;; Shift the moving bases
+       (for/list ([base ge])
+                 (if (moving? base) (move base translate) base))
+       ;; Expand the dual, shift all post-dual boundaries, and then shift
+       ;; the moving bases
+       ;; All bases need to get shifted by the boundary translation function.
+       ;; Moving bases must afterwards be shifted to the dual's new location.
+       (for/list ([base ge])
+                 (if (moving? base)
+                     (move (move base translate)
+                             (λ (b) (+ b (- (translate (left-bound dual))
+                                            (left-bound carrier)))))
+                     (move base translate))))
+   ge-<=))
 
 
 ;;; Check whether a generalized equation has a contradiction: two constant

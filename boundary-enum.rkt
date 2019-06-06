@@ -72,6 +72,10 @@
 ;;;; If we're moving bases from a narrow carrier zone to a wider dual zone,
 ;;;; how can we map carrier-zone boundaries to dual-zone boundaries in a way
 ;;;; that maps endpoints to endpoints and preserves ordering?
+;;;;   or equivalently...
+;;;; If we're moving bases from a wider carrier zone to a narrower dual zone,
+;;;; how can we widen the dual zone by inserting new boundaries so that it
+;;;; matches the carrier's width?
 
 ;;; Enumerate end-preserving monotonic injections f from [0,m] to [0,n],
 ;;; that is, f(0)=0 and f(m)=n (note: if m>n, there are no such functions)
@@ -82,12 +86,17 @@
               (combination->monotonic-map c)))
 
 
-;;; Enumerate end-preserving monotonic injections from [l01,hi1] to [lo2,hi2],
+;;; Enumerate end-preserving monotonic injections from [lo1,hi1] to [lo2,hi2],
 ;;; representing them as Racket procedures.
 ;;; Natural Natural Natural Natural -> [Stream-of [Natural -> Natural]]
 (define (monotonic-maps/fn lo1 hi1 lo2 hi2)
   (for/stream ([xs (monotonic-maps/list (+ (- hi1 lo1) 1) (+ (- hi2 lo2) 1))])
-              (λ (n) (+ lo2 (list-ref xs (- n lo1))))))
+              ;; Generalize the mapping specified by the destination list by
+              ;; having everything left of lo1 map equally far left of lo2 and
+              ;; everything right of hi1 map equally far right of hi2.
+              (λ (n) (cond [(< n lo1) (+ n (- lo2 lo1))]
+                           [(> n hi1) (+ n (- hi2 hi1))]
+                           [else (+ lo2 (list-ref xs (- n lo1)))]))))
 
 
 ;;; Convert a list of match/skip marks ('M and 'S) with m matches and n skips
@@ -126,5 +135,5 @@
       [(= 0 skips) (cons-to-all 'M (c* (sub1 matches) skips))]
       [else (stream-append (cons-to-all 'S (c* matches (sub1 skips)))
                            (cons-to-all 'M (c* (sub1 matches) skips)))]))
-  ;(printf "(c* ~v ~v)\n" (- n r) r)
   (c* (- n r) r))
+
