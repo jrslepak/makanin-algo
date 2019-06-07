@@ -10,7 +10,7 @@
 (module+ test (require rackunit))
 
 (provide
- ge
+ ge S
  (contract-out
   [ge? (-> any/c boolean?)]
   [build-bases (->i ([components word?]
@@ -28,12 +28,14 @@
   [carrier (-> ge? ge-base?)]
   [critical-boundary (-> ge? natural?)]
   [transport-bases (-> ge? (listof ge-base?))]
-  [earliest-duplicate (-> ge? ge-base?
+  [earliest-duplicate (-> ge-base? ge?
                           ge-base?)]
   [base-shift-length (-> ge? natural?)]
   [base-shift! (-> ge? natural?
                    void?)]
   [transport! (-> ge? void?)]
+  [transport (-> ge? ge-base? ge-base? (-> natural? natural?)
+                 ge?)]
   [geqn-contradiction? (-> ge? boolean?)]
   [geqn-solved? (-> ge? boolean?)]
   [generators-by-column (-> ge?
@@ -480,20 +482,28 @@
   (define (move base fn)
     (ge-base (ge-base-label base)
              (vector-map fn (ge-base-boundaries base))))
+  ;; Should only the carrier be left out of the result, or the dual too?
+  (define carrier-var-count
+    (for/sum ([base ge]
+              #:when (equal? (ge-base-label base)
+                             (ge-base-label carrier)))
+             1))
+  (define skippable
+    (if (= 2 carrier-var-count)
+        (λ (b) (or (equal? b carrier)
+                   (equal? b dual)))
+        (λ (b) (equal? b carrier))))
   (sort 
-   ;; In either case, do not include the carrier in the final output.
    (if (<= (- (right-bound carrier) (left-bound carrier))
            (- (right-bound dual) (left-bound dual)))
-       ;; Shift the moving bases
+       ;; Just shift the moving bases
        (for/list ([base ge]
-                  #:when (not (eq? base carrier)))
+                  #:when (not (skippable base)))
                  (if (moving? base) (move base translate) base))
-       ;; Expand the dual, shift all post-dual boundaries, and then shift
-       ;; the moving bases.
        ;; All bases need to get shifted by the boundary translation function.
        ;; Moving bases must afterwards be shifted to the dual's new location.
        (for/list ([base ge]
-                  #:when (not (eq? base carrier)))
+                  #:when (not (skippable base)))
                  (if (moving? base)
                      (move (move base translate)
                              (λ (b) (+ b (- (translate (left-bound dual))
@@ -506,43 +516,40 @@
     (ge [(S x) (1 4)] [(S y) (4 6)] [(S x) (6 10)]
         [(S y) (1 2)] [1 (2 3)] [(S z) (3 5)] [(S z) (5 7)]
         [(S z) (7 9)] [1 (9 10)]))
-  (check-equal?
-   (let* ([c (carrier weird-example)]
-          [d (earliest-duplicate c weird-example)])
-     (for/list
-      ([fn (monotonic-maps/fn (left-bound c) (right-bound c)
-                              (left-bound d) (right-bound d))])
-      (transport weird-example c d fn)))
-   (list (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
-             [(S x) (6 10)] [(S y) (6 8)] [(S z) (7 9)]
-             [1 (8 9)] [1 (9 10)])
-         (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
-             [(S x) (6 10)] [(S y) (6 7)] [(S z) (7 9)]
-             [1 (7 9)] [1 (9 10)])
-         (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
-             [(S x) (6 10)] [(S y) (6 7)] [(S z) (7 9)]
-             [1 (7 8)] [1 (9 10)])))
+  (let* ([c (carrier weird-example)]
+         [d (earliest-duplicate c weird-example)])
+    (for ([fn (monotonic-maps/fn (left-bound c) (right-bound c)
+                                 (left-bound d) (right-bound d))]
+          [expected (list (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
+                              [(S y) (6 8)] [(S z) (7 9)]
+                              [1 (8 9)] [1 (9 10)])
+                          (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
+                              [(S y) (6 7)] [(S z) (7 9)]
+                              [1 (7 9)] [1 (9 10)])
+                          (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
+                              [(S y) (6 7)] [(S z) (7 9)]
+                              [1 (7 8)] [1 (9 10)]))])
+         (check-equal? (transport weird-example c d fn) expected)))
   (define reversed-example
     (ge [(S x) (1 6)] [(S y) (6 8)] [(S x) (8 10)]
         [(S y) (1 2)] [1 (2 3)] [(S z) (3 5)] [(S z) (5 7)]
         [(S z) (7 9)] [1 (9 10)]))
-  (check-equal?
-   (let* ([c (carrier reversed-example)]
-          [d (earliest-duplicate c reversed-example)])
-     (for/list
-      ([fn (monotonic-maps/fn
-            (left-bound d) (right-bound d)
-            (left-bound d) (+ (left-bound d)
-                              (- (right-bound c) (left-bound c))))])
-      (transport reversed-example c d fn)))
-   (list (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 12)] [(S x) (8 13)]
-             [(S y) (8 9)] [1 (9 10)] [(S z) (10 12)] [1 (12 13)])
-         (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 11)] [(S x) (8 13)]
-             [(S y) (8 9)] [1 (9 10)] [(S z) (10 12)] [1 (11 13)])
-         (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 10)] [(S x) (8 13)]
-             [(S y) (8 9)] [1 (9 10)]  [1 (10 13)] [(S z) (10 12)])
-         (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 9)] [(S x) (8 13)]
-             [(S y) (8 9)] [1 (9 13)] [1 (9 10)] [(S z) (10 12)]))))
+  (let* ([c (carrier reversed-example)]
+         [d (earliest-duplicate c reversed-example)])
+    (for
+     ([fn (monotonic-maps/fn
+           (left-bound d) (right-bound d)
+           (left-bound d) (+ (left-bound d)
+                             (- (right-bound c) (left-bound c))))]
+      [expected (list (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 12)]
+                          [(S y) (8 9)] [1 (9 10)] [(S z) (10 12)] [1 (12 13)])
+                      (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 11)]
+                          [(S y) (8 9)] [1 (9 10)] [(S z) (10 12)] [1 (11 13)])
+                      (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 10)]
+                          [(S y) (8 9)] [1 (9 10)]  [1 (10 13)] [(S z) (10 12)])
+                      (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 9)]
+                          [(S y) (8 9)] [1 (9 13)] [1 (9 10)] [(S z) (10 12)]))])
+     (check-equal? (transport reversed-example c d fn) expected))))
 
 
 ;;; Check whether a generalized equation has a contradiction: two constant
