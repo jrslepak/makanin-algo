@@ -22,6 +22,7 @@
                                       nondecreasing?)]))
   (ge-base-clone (-> ge-base?
                      ge-base?))
+  (ge-base-width (-> ge-base? natural?))
   (gconst-base (-> gconst? natural?
                    ge-base?))
   (gconst-base? contract?)
@@ -98,6 +99,9 @@
   (ge-base (ge-base-label base)
            (vector-copy (ge-base-boundaries base))))
 
+;;; Find the number of columns a GE Base spans
+(define (ge-base-width b)
+  (- (right-bound b) (left-bound b)))
 
 ;;; Construct a constant base without passing both n and n+1
 (define (gconst-base c n) (ge-base c (vector n (add1 n))))

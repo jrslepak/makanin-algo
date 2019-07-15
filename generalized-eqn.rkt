@@ -1,7 +1,6 @@
 #lang racket
 
-(require (for-syntax racket/list
-                     syntax/parse
+(require (for-syntax syntax/parse
                      "ge-base.rkt"
                      "utils.rkt")
          "boundary-enum.rkt"
@@ -23,9 +22,13 @@
                     [result (listof ge-base?)])]
   [eqn->ge-list (-> word? word?
                     ge?)]
-  [geqn-columns (-> ge? (listof natural?))]
+  [ge-bases/label (-> ge? any/c
+                      ge?)]
+  [ge-columns (-> ge? (listof natural?))]
+  [svars (-> ge? (set/c svar?))]
+  [gconsts (-> ge? (set/c gconst?))]
   [new-gvars (-> ge? (hash/c symbol? natural?))]
-  [carrier (-> ge? ge-base?)]
+  [carrier (-> ge? (or/c ge-base? false?))]
   [critical-boundary (-> ge? natural?)]
   [transport-bases (-> ge? (listof ge-base?))]
   [earliest-duplicate (-> ge-base? ge?
@@ -36,8 +39,8 @@
   [transport! (-> ge? void?)]
   [transport (-> ge? ge-base? ge-base? (-> natural? natural?)
                  ge?)]
-  [geqn-contradiction? (-> ge? boolean?)]
-  [geqn-solved? (-> ge? boolean?)]
+  [ge-contradiction? (-> ge? boolean?)]
+  [ge-solved? (-> ge? boolean?)]
   [generators-by-column (-> ge?
                             (hash/c natural?
                                     (listof generator?)))]))
@@ -103,12 +106,16 @@
                        [(S a) (0 2)] [(S b) (1 3)]
                        [2 (0 1)] [(S b) (1 3)]))))
 
+;;; Select the GE bases that have a given label
+;;; GE Any -> [Listof GE-base]
+(define (ge-bases/label ge l)
+  (for/list ([base ge] #:when (equal? l (ge-base-label base))) base))
 
 ;;; The columns of a GE are the unit-separated pairs of boundaries located
 ;;; between any GE base's leftmost and rightmost boundaries.
 ;;; A column is represented by its left boundary.
 ;;; GE -> [List-of natural]
-(define (geqn-columns ge)
+(define (ge-columns ge)
   (define sorted-bases (sort ge ge-<=))
   (define base-spans (for/list ([b sorted-bases]) (ge-base-boundaries b)))
   (define covered-intervals
@@ -121,11 +128,11 @@
                    (stream->list (in-range (leftmost interval)
                                            (rightmost interval))))))
 (module+ test
-  (check-equal? (geqn-columns (ge [(S a) (0 3)]))
+  (check-equal? (ge-columns (ge [(S a) (0 3)]))
                 '(0 1 2))
-  (check-equal? (geqn-columns (ge [1 (2 3)] [4 (5 6)]))
+  (check-equal? (ge-columns (ge [1 (2 3)] [4 (5 6)]))
                 '(2 5))
-  (check-equal? (geqn-columns (ge [1 (2 3)] [4 (5 6)] [(S a) (2 6)]))
+  (check-equal? (ge-columns (ge [1 (2 3)] [4 (5 6)] [(S a) (2 6)]))
                 '(2 3 4 5)))
 
 
@@ -134,7 +141,7 @@
 (define (empty-columns ge)
   (define generator-bases
     (for/list ([base ge] #:when (generator-base? base)) base))
-  (define all-columns (geqn-columns ge))
+  (define all-columns (ge-columns ge))
   (define occupied-columns
     (sort (for/list ([gb generator-bases]) (left-bound gb)) <))
   ;; Step through the two sorted lists of columns
@@ -171,6 +178,15 @@
   ;; When a GConst appears within an SVar, drop only that GConst's column
   (check-equal? (empty-columns (ge [(S a) (0 4)] [2 (4 5)] [1 (1 2)]))
                 '(0 2 3)))
+
+;;; Identify all sequence variables used in a GE.
+(define (svars ge)
+  (for/set ([base ge] #:when (svar-base? base)) (ge-base-label base)))
+
+;;; Identify all generator constants used in a GE.
+(define (gconsts ge)
+  (for/set ([base ge] #:when (gconst-base? base)) (ge-base-label base)))
+
 
 
 ;;; Given a GE, construct GVar entries (up to one per column) such that every
@@ -470,6 +486,8 @@
 ;;; the carrier).
 ;;; Since this does not modify the GE in place, it may benefit from a fancier
 ;;; persistent data structure.
+;;; TODO: Unify the two code paths regarding use of the translate function so
+;;; that it is *always* used as the "new boundary insertion" function
 ;;; GE GE-Base GE-Base [Natural -> Natural] -> GE
 (define (transport ge carrier dual translate)
   ;; Check whether a base is entirely inside the moving zone
@@ -480,6 +498,11 @@
         (right-bound carrier)))
   ;; Construct a moved version of a base
   (define (move base fn)
+    #;
+    (printf "\tMoving ~v from [~v ... ~v] to [~v ... ~v]\n"
+            (ge-base-label base)
+            (left-bound base) (right-bound base)
+            (fn (left-bound base)) (fn (right-bound base)))
     (ge-base (ge-base-label base)
              (vector-map fn (ge-base-boundaries base))))
   ;; Should only the carrier be left out of the result, or the dual too?
@@ -488,14 +511,18 @@
               #:when (equal? (ge-base-label base)
                              (ge-base-label carrier)))
              1))
+  ;; TODO: Revise rules for which bases to "abandon" (maybe means trimming off
+  ;; portions of bases that cross the critical boundary)
+  ;; TODO: Keep vestigial bases around in a separate notepad so the system of
+  ;; equations built at the end of all transport steps accounts for them.
   (define skippable
     (if (= 2 carrier-var-count)
         (λ (b) (or (equal? b carrier)
                    (equal? b dual)))
         (λ (b) (equal? b carrier))))
   (sort 
-   (if (<= (- (right-bound carrier) (left-bound carrier))
-           (- (right-bound dual) (left-bound dual)))
+   (if (<= (ge-base-width carrier)
+           (ge-base-width dual))
        ;; Just shift the moving bases
        (for/list ([base ge]
                   #:when (not (skippable base)))
@@ -505,13 +532,32 @@
        (for/list ([base ge]
                   #:when (not (skippable base)))
                  (if (moving? base)
-                     (move (move base translate)
-                             (λ (b) (+ b (- (translate (left-bound dual))
-                                            (left-bound carrier)))))
+                     (move (move base
+                                 translate)
+                           (λ (b) (+ b (- (translate (left-bound dual))
+                                          (left-bound carrier)))))
                      (move base translate))))
    ge-<=))
 
 (module+ test
+  (define GUTIERREZ-EXAMPLE-PG8 (ge [(S u) (1 3)]
+                                    [(S x) (5 8)]
+                                    [(S x) (1 5)]
+                                    [(S u) (6 8)]
+                                    [(S y) (3 7)]
+                                    [(S y) (2 5)]))
+  (let* ([c (carrier GUTIERREZ-EXAMPLE-PG8)]
+         [d (earliest-duplicate c GUTIERREZ-EXAMPLE-PG8)]
+         [fns (monotonic-maps/fn
+               (left-bound d) (right-bound d)
+               (left-bound d) (+ (left-bound d)
+                                 (ge-base-width c)))])
+    (check-equal? (transport GUTIERREZ-EXAMPLE-PG8 c d
+                             (stream-ref fns 2))
+                  (ge [(S y) (3 7)]
+                      [(S u) (5 7)]
+                      [(S y) (6 9)]
+                      [(S u) (6 9)])))
   (define weird-example
     (ge [(S x) (1 4)] [(S y) (4 6)] [(S x) (6 10)]
         [(S y) (1 2)] [1 (2 3)] [(S z) (3 5)] [(S z) (5 7)]
@@ -540,7 +586,7 @@
      ([fn (monotonic-maps/fn
            (left-bound d) (right-bound d)
            (left-bound d) (+ (left-bound d)
-                             (- (right-bound c) (left-bound c))))]
+                             (ge-base-width c)))]
       [expected (list (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 12)]
                           [(S y) (8 9)] [1 (9 10)] [(S z) (10 12)] [1 (12 13)])
                       (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 11)]
@@ -554,7 +600,7 @@
 
 ;;; Check whether a generalized equation has a contradiction: two constant
 ;;; bases in the same column with different labels.
-(define (geqn-contradiction? geqn)
+(define (ge-contradiction? geqn)
   (define const-bases
     (sort (for/list ([base geqn] #:when (gconst-base? base)) base) ge-<=))
   (define (overlap-conflict bases)
@@ -567,23 +613,23 @@
   (overlap-conflict const-bases))
 
 (module+ test
-  (check-true (geqn-contradiction? (ge [3 (0 1)] [4 (1 2)]
+  (check-true (ge-contradiction? (ge [3 (0 1)] [4 (1 2)]
                                        [2 (0 1)] [4 (1 2)])))
-  (check-false (geqn-contradiction? (ge [(S a) (0 1)] [4 (1 2)]
+  (check-false (ge-contradiction? (ge [(S a) (0 1)] [4 (1 2)]
                                         [2 (0 1)] [4 (1 2)])))
-  (check-false (geqn-contradiction? (ge [(S a) (0 1)] [4 (1 2)]
+  (check-false (ge-contradiction? (ge [(S a) (0 1)] [4 (1 2)]
                                         [(S b) (0 1)] [4 (1 2)])))
-  (check-false (geqn-contradiction? (ge [(S a) (0 1)] [4 (1 2)]
+  (check-false (ge-contradiction? (ge [(S a) (0 1)] [4 (1 2)]
                                         [4 (0 1)] [(S b) (1 2)]))))
 
 
 ;;; Check whether a generalized equation is solved: no more variable bases.
-(define (geqn-solved? geqn)
+(define (ge-solved? geqn)
   (not (for/or ([base geqn]) (svar-base? base))))
 
 (module+ test
-  (check-false (geqn-solved? G1/t1))
-  (check-true (geqn-solved? G1/t2)))
+  (check-false (ge-solved? G1/t1))
+  (check-true (ge-solved? G1/t2)))
 
 
 ;;; Given a solved generalized equation, identify which bases are located at
@@ -594,7 +640,7 @@
 ;;; for (if there are multiple distinct generators, we have a contradiction).
 ;;; GE -> [Hash Natural [List-of Generator]]
 (define (generators-by-column ge)
-  (for/hash ([col (geqn-columns ge)])
+  (for/hash ([col (ge-columns ge)])
             (values col
                     (for/list ([base ge]
                                #:when (and (= col (left-bound base))
