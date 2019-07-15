@@ -18,7 +18,9 @@
                            [hi2 natural?])
                           #:pre (lo1 hi1 lo2 hi2)
                           (and (<= lo1 hi1) (<= lo2 hi2))
-                          [result (stream/c (-> natural? natural?))])]))
+                          [result (stream/c (-> natural? natural?))])]
+  [partitions (-> natural?
+                  (stream/c (listof (listof natural?))))]))
 
 
 ;;;; How can two sides of an equation can be put in alignment?
@@ -137,3 +139,24 @@
                            (cons-to-all 'M (c* (sub1 matches) skips)))]))
   (c* (- n r) r))
 
+
+;;; Enumerate partitions of a set of n elements, representing a partition as a
+;;; list of lists of naturals in which each of {1, ..., n} appears once.
+;;; Natural -> [Stream-of [List-of [List-of Natural]]]
+(define (partitions n)
+  (cond [(= 0 n) (stream '())]
+        [else
+         (for/fold ([updated-partitions (stream)])
+                   ([p (partitions (sub1 n))])
+           (stream-append updated-partitions (add-to-partitions n p)))]))
+;;; Given a partition of some finite set, represented as a list of lists,
+;;; generate all possible ways a new thing could be added to the partition.
+;;; ∀ T. T [List-of [List-of T]] -> [Stream-of [List-of [List-of T]]]
+(define (add-to-partitions new p)
+  (stream-cons
+   (cons (list new) p)
+   (for/stream ([expansion (length p)])
+               ;; The ith iteration adds the new element to the ith section
+               (for/list ([section p]
+                          [pos (length p)])
+                         (if (= pos expansion) (cons new section) section)))))
