@@ -20,24 +20,26 @@
         [(not (admissible? ge)) (stream)]
         [else
          (let* ([d (earliest-duplicate c ge)]
-                ;; Enumerate the possible translation functions
+                ;; Enumerate the possible column-relabeling functions
                 ;; - if carrier is shorter than dual,
                 ;;     enumerate functions from carrier range to dual range
                 ;; - if carrier is longer than dual, 
                 ;;     enumerate functions from dual range to expanded dual range
-                [translators
+                [relabelers
                  (if (<= (ge-base-width c)
                          (ge-base-width d))
+                     ;; Add new boundaries in the carrier's zone
                      (monotonic-maps/fn (left-bound c) (right-bound c)
-                                        (left-bound d) (right-bound d))
-                     (monotonic-maps/fn
-                      (left-bound d) (right-bound d)
-                      (left-bound d) (+ (left-bound d)
-                                        (ge-base-width c))))]
+                                        (left-bound c) (+ (left-bound c)
+                                                          (ge-base-width d)))
+                     ;; Add new boundaries in the dual's zone
+                     (monotonic-maps/fn (left-bound d) (right-bound d)
+                                        (left-bound d) (+ (left-bound d)
+                                                          (ge-base-width c))))]
                 ;; Build stream of results of single transport step
                 ;; Recur on each element of single-step result stream
-                [new-geqns (for/stream ([t translators])
-                                       (transport ge c d t))])
+                [new-geqns (for/stream ([r relabelers])
+                                       (transport ge c d r))])
            (for/fold ([completed-geqns (stream)])
                      ([stepped new-geqns])
              (stream-append completed-geqns (transport* stepped))))]))

@@ -7,6 +7,7 @@
  (contract-out
   (struct svar ([name symbol?]))
   (struct gvar ([name symbol?]))
+  (struct pvar ([name symbol?]))
   (gconst? contract?)
   (generator? contract?)
   (word? contract?)
@@ -17,7 +18,7 @@
                      (listof gconst?)))
   (svar-labels (-> (listof ge-base?)
                    (listof svar?)))
-  (struct ge-base ([label (or/c gconst? svar? gvar?)]
+  (struct ge-base ([label (or/c gconst? svar? gvar? pvar?)]
                    [boundaries (and/c (vectorof natural? #:immutable #f)
                                       nondecreasing?)]))
   (ge-base-clone (-> ge-base?
@@ -28,7 +29,9 @@
   (gconst-base? contract?)
   (gvar-base? contract?)
   (svar-base? contract?)
+  (pvar-base? contract?)
   (generator-base? contract?)
+  (erase (-> ge-base? ge-base?))
   (left-bound (-> ge-base?
                   natural?))
   (right-bound (-> ge-base?
@@ -57,18 +60,28 @@
 (define-struct/contract svar
   ([name symbol?])
   #:transparent)
+;;; When transport moves a sequence variable, leave a palimpsest variable (pvar)
+;;; behind. This should not be eligible for transport, but it helps track which
+;;; positions within a variable's column span must be which constants.
+(define-struct/contract pvar
+  ([name symbol?])
+  #:transparent)
+
 ;;; Ordering on GConsts, GVars, and SVars.
-;;; any GConst < any GVar < any SVar
+;;; any GConst < any GVar < any SVar < any PVar
 ;;; Within each class, ties are resolved by numeric or lexical comparison
 (define (label-< x y)
   (cond [(and (gconst? x) (gconst? y))
          (< x y)]
         [(and (svar? x) (svar? y))
          (symbol<? (svar-name x) (svar-name y))]
+        [(and (pvar? x) (pvar? y))
+         (symbol<? (pvar-name x) (pvar-name y))]
         [(and (gvar? x) (gvar? y))
          (symbol<? (gvar-name x) (gvar-name y))]
         [(gconst? x) #t]
-        [(gvar? x) (svar? y)]
+        [(gvar? x) (or (svar? y) (pvar? y))]
+        [(svar? x) (pvar? y)]
         [else #f]))
 
 ;;; A Word is a [List [U GConst SVar]]
@@ -92,7 +105,7 @@
 ;;; - (ge-base Var [List-of Nat])  where the list is nondecreasing
 ;;;     and has length >= 2
 (define-struct/contract ge-base
-  ([label (or/c gconst? svar? gvar?)]
+  ([label (or/c gconst? svar? gvar? pvar?)]
    [boundaries (and/c (vectorof natural? #:immutable #f) nondecreasing?)])
   #:transparent)
 (define (ge-base-clone base)
@@ -108,11 +121,18 @@
 
 (module+ test (check-equal? (gconst-base 5 0) (ge-base 5 (vector 0 1))))
 
+;;; Convert a sequence variable base to a palimpsest base
+(define (erase svb)
+  (if (svar-base? svb)
+      (ge-base (pvar (svar-name (ge-base-label svb))) (ge-base-boundaries svb))
+      svb))
 
-;;; Does this base have a constant label? seq var label? gen var label?
+;;; Does this base have a constant label? seq var label?
+;;; gen var label? palimpsest var label?
 (define (gconst-base? b) (and (ge-base? b) (gconst? (ge-base-label b))))
 (define (svar-base? b) (and (ge-base? b) (svar? (ge-base-label b))))
 (define (gvar-base? b) (and (ge-base? b) (gvar? (ge-base-label b))))
+(define (pvar-base? b) (and (ge-base? b) (pvar? (ge-base-label b))))
 (define (generator-base? b) (or (gconst-base? b) (gvar-base? b)))
 
 
@@ -181,9 +201,10 @@
 ;;; by choosing the base with the higher right boundary as lesser.
 (define (ge-<=/2 b1 b2)
   (cond [(< (left-bound b1) (left-bound b2)) #t]
-        [(= (left-bound b1) (left-bound b2))
-         (<= (right-bound b2) (right-bound b1))]
-        [else #f]))
+        [(> (left-bound b1) (left-bound b2)) #f]
+        [(< (right-bound b2) (right-bound b1)) #t]
+        [(> (right-bound b2) (right-bound b1)) #f]
+        [else (label-< (ge-base-label b1) (ge-base-label b2))]))
 (define (ge-<= . bases)
   (cond [(<= (length bases) 1) #t]
         [(ge-<=/2 (first bases) (second bases)) (apply ge-<= (rest bases))]
@@ -205,8 +226,10 @@
                         (ge-base 3 (vector 0 1))))
   (check-true (ge-<=/2 (ge-base (svar 'e) (vector 1 4))
                        (ge-base (svar 'f) (vector 1 1))))
-  (check-true (ge-<=/2 (ge-base (svar 'e) (vector 0 1))
-                       (ge-base 4 (vector 0 1))))
+  (check-false (ge-<=/2 (ge-base (svar 'e) (vector 0 1))
+                        (ge-base 4 (vector 0 1))))
+  (check-true (ge-<=/2 (ge-base 4 (vector 0 1))
+                       (ge-base (svar 'e) (vector 0 1))))
   (check-false (ge-<=/2 (ge-base (svar 'q) (vector 0 1))
                         (ge-base (svar 'q) (vector 0 2))))
   (check-true (ge-<= (ge-base 3 (vector 0 1))
@@ -222,7 +245,10 @@
                 (ge-base 3 (vector 0 1)))
   (check-equal? (ge-min (ge-base 4 (vector 0 1))
                         (ge-base 3 (vector 0 1)))
-                (ge-base 4 (vector 0 1)))
+                (ge-base 3 (vector 0 1)))
+  (check-equal? (ge-min (ge-base (pvar 'x) (vector 0 1))
+                        (ge-base (svar 'x) (vector 0 1)))
+                (ge-base (svar 'x) (vector 0 1)))
   (check-equal? (ge-min (ge-base 3 (vector 0 1))
                         (ge-base 3 (vector 1 2)))
                 (ge-base 3 (vector 0 1)))

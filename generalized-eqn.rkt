@@ -9,7 +9,7 @@
 (module+ test (require rackunit))
 
 (provide
- ge S
+ ge S P
  (contract-out
   [ge? (-> any/c boolean?)]
   [build-bases (->i ([components word?]
@@ -61,21 +61,26 @@
 (define-syntax (S stx)
   (syntax-parse stx
     [(_ v:id) #'(svar v)]))
+(define-syntax (P stx)
+  (syntax-parse stx
+    [(_ v:id) #'(pvar v)]))
 (begin-for-syntax
   (define-syntax-class ge-label
-    #:literals (S)
+    #:literals (S P)
     (pattern a:nat)
-    (pattern [S a:id]))
+    (pattern [S a:id])
+    (pattern [P a:id]))
   (define-syntax-class ge-base-literal
     (pattern [label:ge-label (boundary:nat ...)])))
 (define-syntax (label->ge-label stx)
   (syntax-parse stx
-    #:literals (S)
+    #:literals (S P)
     [(_ n:nat) #'n]
-    [(_ [S v:id]) #'(svar (quote v))]))
+    [(_ [S v:id]) #'(svar (quote v))]
+    [(_ [P v:id]) #'(pvar (quote v))]))
 (define-syntax (literal->ge-base stx)
   (syntax-parse stx
-    #:literals (S)
+    #:literals (S P)
     [(_ [l:ge-label (boundary:nat ...)])
      (if (nondecreasing? (syntax->datum #'(boundary ...)))
      #'(ge-base (label->ge-label l) (vector boundary ...))
@@ -486,58 +491,48 @@
 ;;; the carrier).
 ;;; Since this does not modify the GE in place, it may benefit from a fancier
 ;;; persistent data structure.
-;;; TODO: Unify the two code paths regarding use of the translate function so
-;;; that it is *always* used as the "new boundary insertion" function
 ;;; GE GE-Base GE-Base [Natural -> Natural] -> GE
-(define (transport ge carrier dual translate)
-  ;; Check whether a base is entirely inside the moving zone
-  (define (moving? base)
-    (<= (left-bound carrier)
-        (left-bound base)
-        (right-bound base)
-        (right-bound carrier)))
+(define (transport ge carrier dual relabel-cols)
   ;; Construct a moved version of a base
   (define (move base fn)
-    #;
-    (printf "\tMoving ~v from [~v ... ~v] to [~v ... ~v]\n"
-            (ge-base-label base)
-            (left-bound base) (right-bound base)
-            (fn (left-bound base)) (fn (right-bound base)))
     (ge-base (ge-base-label base)
              (vector-map fn (ge-base-boundaries base))))
+  ;; Relabel the columns so that the carrier and dual both span the same number
+  ;; of columns.
+  (define widened-ge (for/list ([base ge]) (move base relabel-cols)))
+  (define widened-carrier (move carrier relabel-cols))
+  (define widened-dual (move dual relabel-cols))
+  ;; Shift a transport base from the carrier zone to the dual zone.
+  (define (shift base)
+    (move base (λ (c) (+ c (- (left-bound widened-dual)
+                              (left-bound widened-carrier))))))
+  ;; Check whether a base is still live and entirely inside the carrier zone.
+  (define (shiftable? base)
+    (and (not (pvar-base? base))
+         (<= (left-bound widened-carrier)
+             (left-bound base)
+             (right-bound base)
+             (right-bound widened-carrier))))
   ;; Should only the carrier be left out of the result, or the dual too?
   (define carrier-var-count
     (for/sum ([base ge]
               #:when (equal? (ge-base-label base)
-                             (ge-base-label carrier)))
+                             (ge-base-label widened-carrier)))
              1))
-  ;; TODO: Revise rules for which bases to "abandon" (maybe means trimming off
-  ;; portions of bases that cross the critical boundary)
-  ;; TODO: Keep vestigial bases around in a separate notepad so the system of
-  ;; equations built at the end of all transport steps accounts for them.
-  (define skippable
+  ;; The carrier is going to be "erased" so that it is not considered for future
+  ;; transport rounds. If that would leave the dual as the only live occurrence,
+  ;; erase the dual as well.
+  (define erasable?
     (if (= 2 carrier-var-count)
-        (λ (b) (or (equal? b carrier)
-                   (equal? b dual)))
-        (λ (b) (equal? b carrier))))
-  (sort 
-   (if (<= (ge-base-width carrier)
-           (ge-base-width dual))
-       ;; Just shift the moving bases
-       (for/list ([base ge]
-                  #:when (not (skippable base)))
-                 (if (moving? base) (move base translate) base))
-       ;; All bases need to get shifted by the boundary translation function.
-       ;; Moving bases must afterwards be shifted to the dual's new location.
-       (for/list ([base ge]
-                  #:when (not (skippable base)))
-                 (if (moving? base)
-                     (move (move base
-                                 translate)
-                           (λ (b) (+ b (- (translate (left-bound dual))
-                                          (left-bound carrier)))))
-                     (move base translate))))
-   ge-<=))
+        (λ (b) (or (equal? b widened-carrier)
+                   (equal? b widened-dual)))
+        (λ (b) (equal? b widened-carrier))))
+  (sort (flatten (for/list ([base widened-ge])
+                           (cond [(erasable? base) (erase base)]
+                                 [(shiftable? base) (list (erase base)
+                                                          (shift base))]
+                                 [else base])))
+        ge-<=))
 
 (module+ test
   (define GUTIERREZ-EXAMPLE-PG8 (ge [(S u) (1 3)]
@@ -554,10 +549,14 @@
                                  (ge-base-width c)))])
     (check-equal? (transport GUTIERREZ-EXAMPLE-PG8 c d
                              (stream-ref fns 2))
-                  (ge [(S y) (3 7)]
+                  (ge [(P x) (1 5)]
+                      [(P u) (1 3)]
+                      [(P y) (2 5)]
+                      [(S y) (3 7)]
+                      [(P x) (5 9)]
                       [(S u) (5 7)]
-                      [(S y) (6 9)]
-                      [(S u) (6 9)])))
+                      [(S u) (6 9)]
+                      [(S y) (6 9)])))
   (define weird-example
     (ge [(S x) (1 4)] [(S y) (4 6)] [(S x) (6 10)]
         [(S y) (1 2)] [1 (2 3)] [(S z) (3 5)] [(S z) (5 7)]
@@ -565,16 +564,23 @@
   (let* ([c (carrier weird-example)]
          [d (earliest-duplicate c weird-example)])
     (for ([fn (monotonic-maps/fn (left-bound c) (right-bound c)
-                                 (left-bound d) (right-bound d))]
-          [expected (list (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
-                              [(S y) (6 8)] [(S z) (7 9)]
-                              [1 (8 9)] [1 (9 10)])
-                          (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
-                              [(S y) (6 7)] [(S z) (7 9)]
-                              [1 (7 9)] [1 (9 10)])
-                          (ge [(S z) (3 5)] [(S y) (4 6)] [(S z) (5 7)]
-                              [(S y) (6 7)] [(S z) (7 9)]
-                              [1 (7 8)] [1 (9 10)]))])
+                                 (left-bound c) (+ (left-bound c)
+                                                   (ge-base-width d)))]
+          [expected (list (ge [(P x) (1 5)] [(P y) (1 3)] [1 (3 4)]
+                              [(S z) (4 6)] [(S y) (5 7)] [(S z) (6 8)]
+                              [(P x) (7 11)]
+                              [(S y) (7 9)] [(S z) (8 10)]
+                              [1 (9 10)] [1 (10 11)])
+                          (ge [(P x) (1 5)] [(P y) (1 2)] [1 (2 4)]
+                              [(S z) (4 6)] [(S y) (5 7)] [(S z) (6 8)]
+                              [(P x) (7 11)]
+                              [(S y) (7 8)] [1 (8 10)]
+                              [(S z) (8 10)] [1 (10 11)])
+                          (ge [(P x) (1 5)] [(P y) (1 2)] [1 (2 3)]
+                              [(S z) (3 6)] [(S y) (5 7)] [(S z) (6 8)]
+                              [(P x) (7 11)]
+                              [(S y) (7 8)] [(S z) (8 10)]
+                              [1 (8 9)] [1 (10 11)]))])
          (check-equal? (transport weird-example c d fn) expected)))
   (define reversed-example
     (ge [(S x) (1 6)] [(S y) (6 8)] [(S x) (8 10)]
@@ -587,13 +593,21 @@
            (left-bound d) (right-bound d)
            (left-bound d) (+ (left-bound d)
                              (ge-base-width c)))]
-      [expected (list (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 12)]
+      [expected (list (ge [(P x) (1 6)] [(P y) (1 2)] [1 (2 3)] [(P z) (3 5)]
+                          [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 12)]
+                          [(P x) (8 13)]
                           [(S y) (8 9)] [1 (9 10)] [(S z) (10 12)] [1 (12 13)])
-                      (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 11)]
+                      (ge [(P x) (1 6)] [(P y) (1 2)] [1 (2 3)] [(P z) (3 5)]
+                          [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 11)]
+                          [(P x) (8 13)]
                           [(S y) (8 9)] [1 (9 10)] [(S z) (10 12)] [1 (11 13)])
-                      (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 10)]
+                      (ge [(P x) (1 6)] [(P y) (1 2)] [1 (2 3)] [(P z) (3 5)]
+                          [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 10)]
+                          [(P x) (8 13)]
                           [(S y) (8 9)] [1 (9 10)]  [1 (10 13)] [(S z) (10 12)])
-                      (ge [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 9)]
+                      (ge [(P x) (1 6)] [(P y) (1 2)] [1 (2 3)] [(P z) (3 5)]
+                          [(S z) (5 7)] [(S y) (6 8)] [(S z) (7 9)]
+                          [(P x) (8 13)]
                           [(S y) (8 9)] [1 (9 13)] [1 (9 10)] [(S z) (10 12)]))])
      (check-equal? (transport reversed-example c d fn) expected))))
 
