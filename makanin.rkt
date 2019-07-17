@@ -48,3 +48,47 @@
 ;;; GE -> Boolean
 (define (ge-sat? ge)
   (stream-empty? (transport* ge)))
+
+;;; Interpret a solution provided by Inez.
+;;; String -> [Hash Natural GeneratorConstant] U #f
+(define (interpret-soln result)
+  (if (string-prefix? result "unsat") #f
+      (for/hash ([line (string-split result "\n")]
+                 #:when (regexp-match #rx"col_[0-9]+_[0-9]+ -> 1" line))
+                (match (regexp-match* #rx"[0-9]+" line)
+                  [(list column value one) (values (string->number column)
+                                                   (string->number value))]))))
+
+;;; After all rounds of transport are done, every base with a given variable
+;;; should have the same column width, so every column in the GE can be
+;;; associated with a particular column within variables whose bases include
+;;; that table column. Accumulate a hash from variables to mutable vectors of
+;;; sequence generators by traversing the GE and using the contents of variable
+;;; bases' covered columns.
+;;; If any position in a result variable is #f at the end of this procedure,
+;;; that position is underdetermined by the generalized equation and can be
+;;; any sequence generator.
+;;; GE [Hash Natural GeneratorConstant] -> [Hash Symbol [Vector GeneratorConstant]]
+(define (svar-soln ge col-soln)
+  ;; Determine the column widths of all sequence variables appearing in a GE
+  ;; (there had better be only one width per var), and initialize a hash to map
+  ;; each svar to a mutable vector of corresponding width containing all #f.
+  (define soln (for/hash ([base ge] #:when (svar-base? base))
+                         (values (ge-base-label base)
+                                 (make-vector (ge-base-width base) #f))))
+  ;; For each svar base in the GE, update the corresponding solution vector
+  ;; with the corresponding column values.
+  (for ([base ge] #:when (svar-base? base))
+       (let ([soln-vec (hash-ref soln (ge-base-label base))])
+         (printf "\nHandling the base ~v\n" base)
+         (for ([ge-col (in-range (left-bound base) (right-bound base))]
+               [svar-col (in-range (right-bound base))])
+              (printf "Updating position ~v in ~v with ~v\n"
+                      svar-col
+                      soln-vec
+                      (hash-ref col-soln ge-col #f))
+              (vector-set! soln-vec svar-col
+                           (or (vector-ref soln-vec svar-col)
+                               (hash-ref col-soln ge-col #f))))))
+
+  soln)

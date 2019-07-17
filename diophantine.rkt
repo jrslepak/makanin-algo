@@ -9,7 +9,9 @@
   [LDE-system? contract?]
   [LDE-systems (-> ge? (listof LDE-system?))]
   [LDE-system (-> ge? gconst? LDE-system?)]
+  [merged-LDE-system (-> ge? LDE-system?)]
   [admissible? (-> ge? boolean?)]
+  [inez-check (-> LDE-system? string?)]
   [inez-sat? (-> LDE-system? boolean?)]))
 
 (module+ test (require rackunit)
@@ -103,6 +105,34 @@
                   [(col_5 col_6 col_7) (col_1 col_2 col_3 col_4)]
                   [(col_3 col_4 col_5 col_6) (col_2 col_3 col_4)])))
 
+;;; Construct a single LDE that merges all single-constant LDEs.
+;;; Once transport is finished, use this to construct a solution. The solution,
+;;; if one exists, gives values for variables whose names have the form
+;;; col_<C>_<N>. Assigning 1 means column C must contain the generator N. No
+;;; column will have multiple different generators assigned because the presence
+;;; of one generator base in a column produces an "=0" constraint for all other
+;;; generators at that column.
+;;; A single-generator system can be seen as a candidate for an unsatisfiable
+;;; core of this larger system (though likely not a *minimal* one).
+;;; GE -> LDE
+(define (merged-LDE-system ge)
+  ;; Like map, but apply the function to every atom in a nested list
+  (define (map* f xs)
+    (cond [(empty? xs) '()]
+          [(list? (first xs)) (cons (map* f (first xs)) (map* f (rest xs)))]
+          [else (cons (f (first xs)) (map* f (rest xs)))]))
+  ;; Append the given tag string onto a string or symbol, but leave anything
+  ;; else untouched.
+  (define ((tag-var t) x)
+    (cond [(string? x) (string-append x t)]
+          [(symbol? x) (string->symbol (string-append (symbol->string x) t))]
+          [else x]))
+  (define single-LDEs
+    (for/list ([c (gconsts ge)])
+              (map* (tag-var (string-append "_" (number->string c)))
+                    (LDE-system ge c))))
+  (apply append single-LDEs))
+
 ;;; Construct the LDEs associated with a particular constant in a GE.
 ;;; GE GeneratorConstant -> [Listof LDE]
 (define (gconst-LDEs ge c)
@@ -134,8 +164,8 @@
 
 ;;; Invoke Inez on a system of linear Diophantine equations to determine whether
 ;;; the system is solvable.
-;;; LDE-system -> Boolean
-(define (inez-sat? ldes)
+;;; LDE-system -> String
+(define (inez-check ldes)
   (define script-file (make-temporary-file "Inez_~a.ml"))
   (define script-port (open-output-file script-file
                                         #:exists 'truncate))
@@ -146,7 +176,13 @@
                 (find-executable-path "inez.opt")
                 script-file))
   (define inez-result (port->string inez-stdout))
-  (not (equal? inez-result "unsat\n")))
+  (printf "Inez result:\n~a\n\n" inez-result)
+  inez-result)
+
+;;; Does Inez say this LDE system is satisfiable?
+;;; LDE-system -> Boolean
+(define (inez-sat? ldes)
+  (not (equal? (inez-check ldes) "unsat\n")))
 (module+ test
   (check-true (inez-sat? (LDE-system SIMPLE-SAT 1)))
   (check-false (inez-sat? (LDE-system SIMPLE-UNSAT 1)))
@@ -160,17 +196,31 @@
                  "\n\n"
                  (string-join (map LDE->inez ldes) "\n"
                               #:after-last "\n\n")
-                 "solve_print_result() ;;\n"))
+                 "solve_print_result() ;;\n"
+                 (print-soln ldes)))
 
 ;;; Build Inez logic-variable declarations for all variables mentioned in a sum,
 ;;; LDE, or system of LDEs
 ;;; [LDE or LDE-system] -> String
 (define (declare-vars l)
   (define vars (for/set ([e (flatten l)] #:when (symbol? e)) e))
-  (define decls (for/list ([var vars]) (string-append "let "
-                                                      (symbol->string var)
-                                                      " = fresh_int_var () ;;")))
+  (define decls (for/list ([var vars])
+                          (string-append "let "
+                                         (symbol->string var)
+                                         " = fresh_int_var () ;;")))
   (string-join decls "\n"))
+
+;;; Generate Inez code that prints the solution for each variable in an LDE
+;;; or LDE system (if there is a solution)
+(define (print-soln l)
+  (define vars (for/set ([e (flatten l)] #:when (symbol? e)) e))
+  (define prints (for/list ([var vars])
+                           (string-append "ideref_printf \""
+                                          (symbol->string var)
+                                          " -> %d\\n\" "
+                                          (symbol->string var)
+                                          " ;;")))
+  (string-join prints "\n"))
 
 ;;; Turn an LDE into a constraint in Inez syntax
 ;;; LDE -> String
