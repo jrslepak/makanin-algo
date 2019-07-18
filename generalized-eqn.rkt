@@ -3,7 +3,7 @@
 (require (for-syntax syntax/parse
                      "ge-base.rkt"
                      "utils.rkt")
-         "boundary-enum.rkt"
+         "enumerate.rkt"
          "ge-base.rkt"
          "utils.rkt")
 (module+ test (require rackunit))

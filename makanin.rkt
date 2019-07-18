@@ -1,7 +1,7 @@
 #lang racket
 
 (require "generalized-eqn.rkt"
-         "boundary-enum.rkt"
+         "enumerate.rkt"
          "diophantine.rkt"
          "ge-base.rkt")
 
