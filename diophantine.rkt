@@ -131,8 +131,14 @@
     (for/list ([c (gconsts ge)])
               (map* (tag-var (string-append "_" (number->string c)))
                     (LDE-system ge c))))
-  ;; TODO: Require the sum of each column's generator variables to be 1
-  (apply append single-LDEs))
+  ;; Require the sum of each column's generator variables to be 1
+  (define col-sums
+    (for/list ([col (ge-columns ge)])
+              (list '(1)
+                    (for/list ([gc (gconsts ge)])
+                              ((tag-var (string-append "_" (number->string gc)))
+                               (col->LDE-var col))))))
+  (apply append col-sums single-LDEs))
 
 ;;; Construct the LDEs associated with a particular constant in a GE.
 ;;; GE GeneratorConstant -> [Listof LDE]
