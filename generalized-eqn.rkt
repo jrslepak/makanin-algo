@@ -33,17 +33,9 @@
   [transport-bases (-> ge? (listof ge-base?))]
   [earliest-duplicate (-> ge-base? ge?
                           ge-base?)]
-  [base-shift-length (-> ge? natural?)]
-  [base-shift! (-> ge? natural?
-                   void?)]
-  [transport! (-> ge? void?)]
   [transport (-> ge? ge-base? ge-base? (-> natural? natural?)
                  ge?)]
-  [ge-contradiction? (-> ge? boolean?)]
-  [ge-solved? (-> ge? boolean?)]
-  [generators-by-column (-> ge?
-                            (hash/c natural?
-                                    (listof generator?)))]))
+  [ge-solved? (-> ge? boolean?)]))
 
 ;;; A Generalized Equation ("GE") is a list of GE Bases in which each sequence
 ;;; var is used as a label at least twice, in bases with the same number of
@@ -401,89 +393,7 @@
                duplicate)))
 
 
-;;; Determine the shift length -- how far must the carrier and transport bases
-;;; be moved in order to meet the carrier's dual?
-(define (base-shift-length geqn)
-  (- (right-bound (earliest-duplicate (carrier geqn) geqn))
-     (right-bound (carrier geqn))))
-
-(module+ test
-  (check-equal? (base-shift-length (ge [(S z) (0 3)]
-                                       [(S z) (0 3)]))
-                0)
-  (check-equal? (base-shift-length (ge [4 (0 1)]
-                                       [(S z) (1 2)]
-                                       [(S z) (0 1)]
-                                       [5 (1 2)]))
-                1)
-  (check-equal? (base-shift-length GUTIERREZ-EXAMPLE-A) 3)
-  (check-equal? (base-shift-length GUTIERREZ-EXAMPLE-B) 3))
-
-
-;;; Destructively shift a base right by the given distance (use negative
-;;; distance for left shift).
-(define (base-shift! base dist)
-  (vector-map! (λ (bound) (+ bound dist)) (ge-base-boundaries base)))
-
-(module+ test
-  (let ([TEST-VAR-BASE (ge-base (svar 'q) (vector 0 3 7))])
-    (check-equal? (left-bound TEST-VAR-BASE) 0)
-    (check-equal? (right-bound TEST-VAR-BASE) 7)
-    (base-shift! TEST-VAR-BASE 2)
-    (check-equal? (left-bound TEST-VAR-BASE) 2)
-    (check-equal? (right-bound TEST-VAR-BASE) 9)))
-
-
-;;; Destructively ransport the largest of the leftmost variable bases to the
-;;; same location as the other occurrence of the same variable, along with the
-;;; other bases which overlap it. If there are only two occurrences of the
-;;; carrier's variable in the generalized equation, remove both; otherwise,
-;;; remove only the carrier.
-;;; Note: This makes the sometimes unsafe assumption that the carrier and target
-;;; bases cover the same number of columns.
-(define (transport! geqn)
-  (define carr (carrier geqn))
-  (define dual (earliest-duplicate carr geqn))
-  (define dist (base-shift-length geqn))
-  (define tbs (transport-bases geqn))
-  (for ([base tbs]) (base-shift! base dist))
-  (if (= 2 (for/sum ([base geqn]
-                     #:when (equal? (ge-base-label base) (ge-base-label carr)))
-                    1))
-      (for/list ([base geqn]
-                 #:when (not (equal? (ge-base-label base)
-                                     (ge-base-label carr))))
-                base)
-      (for/list ([base geqn] #:when (not (eq? base carr))) base)))
-
-(module+ test
-  (define G1 (map ge-base-clone GUTIERREZ-EXAMPLE-A))
-  (define G1/t1 (transport! G1))
-  (check-equal? (sort G1/t1 ge-<=)
-                (sort (ge [(S x) (4 5)] [1 (5 6)] [2 (3 4)]
-                          [2 (3 4)] [1 (4 5)] [(S x) (5 6)])
-                      ge-<=))
-  (define G1/t2 (transport! (map ge-base-clone G1/t1)))
-  (check-equal? (sort G1/t2 ge-<=)
-                (sort (ge [1 (5 6)] [2 (3 4)]
-                          [2 (3 4)] [1 (5 6)])
-                      ge-<=))
-
-  (define G1A (map ge-base-clone PADDED-A))
-  (define G1A/t1 (transport! G1A))
-  
-
-  (define G2 (map ge-base-clone GUTIERREZ-EXAMPLE-B))
-  (define G2/t1 (transport! G2))
-  (check-equal? (sort G2/t1 ge-<=)
-                (sort (ge [1 (5 6)] [2 (6 7)] [(S y) (7 8)]
-                          [(S y) (4 5)] [2 (5 6)] [1 (6 7)])
-                      ge-<=))
-
-  (define G2A (map ge-base-clone PADDED-A)))
-
-
-;;; Path-specified replacement for `transport!' procedure: instead of
+;;; Path-specified version of Makanin's `transport' procedure: instead of
 ;;; automatically discovering the carrier/dual bases, takes the carrier base
 ;;; and dual as arguemnts, along with a function which either maps from the
 ;;; carrier's interval to the dual's interval (if the dual is at least as wide
@@ -612,73 +522,13 @@
      (check-equal? (transport reversed-example c d fn) expected))))
 
 
-;;; Check whether a generalized equation has a contradiction: two constant
-;;; bases in the same column with different labels.
-(define (ge-contradiction? geqn)
-  (define const-bases
-    (sort (for/list ([base geqn] #:when (gconst-base? base)) base) ge-<=))
-  (define (overlap-conflict bases)
-    (and (> (length bases) 1)
-         (or (and (= (left-bound (first bases))
-                     (left-bound (second bases)))
-                  (not (equal? (ge-base-label (first bases))
-                               (ge-base-label (second bases)))))
-             (overlap-conflict (rest bases)))))
-  (overlap-conflict const-bases))
-
-(module+ test
-  (check-true (ge-contradiction? (ge [3 (0 1)] [4 (1 2)]
-                                       [2 (0 1)] [4 (1 2)])))
-  (check-false (ge-contradiction? (ge [(S a) (0 1)] [4 (1 2)]
-                                        [2 (0 1)] [4 (1 2)])))
-  (check-false (ge-contradiction? (ge [(S a) (0 1)] [4 (1 2)]
-                                        [(S b) (0 1)] [4 (1 2)])))
-  (check-false (ge-contradiction? (ge [(S a) (0 1)] [4 (1 2)]
-                                        [4 (0 1)] [(S b) (1 2)]))))
-
-
 ;;; Check whether a generalized equation is solved: no more variable bases.
 (define (ge-solved? geqn)
   (not (for/or ([base geqn]) (svar-base? base))))
 
 (module+ test
-  (check-false (ge-solved? G1/t1))
-  (check-true (ge-solved? G1/t2)))
-
-
-;;; Given a solved generalized equation, identify which bases are located at
-;;; each column.
-;;; The GBC hash of a GE's initial state can be used to construct the form of
-;;; each sequence variable's solution. The GBC of a GE after it has been solved
-;;; via transport! identifies the generator constant each generator must stand
-;;; for (if there are multiple distinct generators, we have a contradiction).
-;;; GE -> [Hash Natural [List-of Generator]]
-(define (generators-by-column ge)
-  (for/hash ([col (ge-columns ge)])
-            (values col
-                    (for/list ([base ge]
-                               #:when (and (= col (left-bound base))
-                                           (generator-base? base)))
-                              (ge-base-label base)))))
-
-(module+ test
-  (define (summarize-gbc h)
-    (sort (for/list ([(k v) h])
-             (list k (sort (map (λ (x) (if (gvar? x) (collapse-gvar x) x)) v)
-                           label-<)))
-         (λ (x y) (< (first x) (first y)))))
-  (check-equal? (summarize-gbc (generators-by-column PADDED-A))
-   `([1 (,(gvar 'col_1))]
-     [2 (1)]
-     [3 (2 2)]
-     [4 (1)]
-     [5 (,(gvar 'col_5))]))
-  (check-equal? (summarize-gbc (generators-by-column PADDED-B))
-   `([1 (,(gvar 'col_1))]
-     [2 (2)]
-     [3 (1)]
-     [4 (,(gvar 'col_4))]
-     [5 (1)]
-     [6 (2)]
-     [7 (,(gvar 'col_7))])))
+  (check-false (ge-solved? (ge [(S x) (1 2)] [1 (2 3)]
+                               [1 (1 2)] [(S x) (2 3)])))
+  (check-true (ge-solved? (ge [(P x) (1 2)] [1 (2 3)]
+                              [1 (1 2)] [(P x) (2 3)]))))
 
