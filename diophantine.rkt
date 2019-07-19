@@ -131,6 +131,7 @@
     (for/list ([c (gconsts ge)])
               (map* (tag-var (string-append "_" (number->string c)))
                     (LDE-system ge c))))
+  ;; TODO: Require the sum of each column's generator variables to be 1
   (apply append single-LDEs))
 
 ;;; Construct the LDEs associated with a particular constant in a GE.
@@ -176,13 +177,13 @@
                 (find-executable-path "inez.opt")
                 script-file))
   (define inez-result (port->string inez-stdout))
-  (printf "Inez result:\n~a\n\n" inez-result)
+  #;(printf "Inez result:\n~a\n\n" inez-result)
   inez-result)
 
 ;;; Does Inez say this LDE system is satisfiable?
 ;;; LDE-system -> Boolean
 (define (inez-sat? ldes)
-  (not (equal? (inez-check ldes) "unsat\n")))
+  (not (string-prefix? (inez-check ldes) "unsat")))
 (module+ test
   (check-true (inez-sat? (LDE-system SIMPLE-SAT 1)))
   (check-false (inez-sat? (LDE-system SIMPLE-UNSAT 1)))

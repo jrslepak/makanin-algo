@@ -17,7 +17,14 @@
   ;; Identify the carrier and dual (if none, return singleton stream)
   (define c (carrier ge))
   (cond [(not c) (stream ge)]
+        ;; Exclude this result if an associated linear Diophantine equation
+        ;; system has no solution.
         [(not (admissible? ge)) (stream)]
+        ;; Exclude this result if any generator base spans multiple columns
+        [(for/or ([base ge])
+                 (and (generator-base? base)
+                      (not (= 1 (ge-base-width base)))))
+         (stream)]
         [else
          (let* ([d (earliest-duplicate c ge)]
                 ;; Enumerate the possible column-relabeling functions
@@ -50,7 +57,7 @@
   (stream-empty? (transport* ge)))
 
 ;;; Interpret a solution provided by Inez.
-;;; String -> [Hash Natural GeneratorConstant] U #f
+;;; String -> [Hash Natural [GeneratorConstant U #f]] U #f
 (define (interpret-soln result)
   (if (string-prefix? result "unsat") #f
       (for/hash ([line (string-split result "\n")]
@@ -58,6 +65,13 @@
                 (match (regexp-match* #rx"[0-9]+" line)
                   [(list column value one) (values (string->number column)
                                                    (string->number value))]))))
+
+;;; A Solution for a generalized equation is a
+;;;   [Hash Symbol [Vector [GeneratorConstant U #f]]]
+;;; The hash maps symbols (the names of sequence variables) to vectors of
+;;; generator constants, except with #f appearing in positions where the GE does
+;;; not require any specific constant.
+
 
 ;;; After all rounds of transport are done, every base with a given variable
 ;;; should have the same column width, so every column in the GE can be
@@ -68,21 +82,25 @@
 ;;; If any position in a result variable is #f at the end of this procedure,
 ;;; that position is underdetermined by the generalized equation and can be
 ;;; any sequence generator.
-;;; GE [Hash Natural GeneratorConstant] -> [Hash Symbol [Vector GeneratorConstant]]
+;;; GE [Hash Natural GeneratorConstant] -> Solution
 (define (svar-soln ge col-soln)
   ;; Determine the column widths of all sequence variables appearing in a GE
   ;; (there had better be only one width per var), and initialize a hash to map
   ;; each svar to a mutable vector of corresponding width containing all #f.
-  (define soln (for/hash ([base ge] #:when (svar-base? base))
-                         (values (ge-base-label base)
+  (define soln (for/hash ([base ge] #:when (or (svar-base? base)
+                                               (pvar-base? base)))
+                         (values (ge-base-name base)
                                  (make-vector (ge-base-width base) #f))))
   ;; For each svar base in the GE, update the corresponding solution vector
   ;; with the corresponding column values.
-  (for ([base ge] #:when (svar-base? base))
-       (let ([soln-vec (hash-ref soln (ge-base-label base))])
+  (for ([base ge] #:when (or (svar-base? base)
+                             (pvar-base? base)))
+       (let ([soln-vec (hash-ref soln (ge-base-name base))])
+         #;
          (printf "\nHandling the base ~v\n" base)
          (for ([ge-col (in-range (left-bound base) (right-bound base))]
                [svar-col (in-range (right-bound base))])
+              #;
               (printf "Updating position ~v in ~v with ~v\n"
                       svar-col
                       soln-vec
