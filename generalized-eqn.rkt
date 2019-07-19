@@ -20,8 +20,13 @@
                                       (= (length b)
                                          (add1 (length components)))))])
                     [result (listof ge-base?)])]
-  [eqn->ge-list (-> word? word?
-                    ge?)]
+  [words->ge* (->* [word? word?]
+                   [boolean?]
+                   (stream/c ge?))]
+  [lists->ge* (->* [(listof (or/c gconst? symbol?))
+                    (listof (or/c gconst? symbol?))]
+                   [boolean?]
+                   (stream/c ge?))]
   [ge-bases/label (-> ge? any/c
                       ge?)]
   [ge-columns (-> ge? (listof natural?))]
@@ -52,10 +57,10 @@
 ;;; Constructor notation for GE
 (define-syntax (S stx)
   (syntax-parse stx
-    [(_ v:id) #'(svar v)]))
+    [(_ v:id) #'(svar 'v)]))
 (define-syntax (P stx)
   (syntax-parse stx
-    [(_ v:id) #'(pvar v)]))
+    [(_ v:id) #'(pvar 'v)]))
 (begin-for-syntax
   (define-syntax-class ge-label
     #:literals (S P)
@@ -277,29 +282,65 @@
              (λ () (build-bases (list (svar 'x) (svar 'y) 2 (svar 'z))
                                 '(0 3 5 6)))))
 
+;;; If a list of ge-bases is malformed due to a sequence variable with only one
+;;; occurrence, insert a copy of it as a dual.
+;;; [List GE-Base] -> GE
+(define (add-dummy-duals bases)
+  (define var-partition (make-hash))
+  (for ([b bases] #:when (svar-base? b))
+       (define var (svar-name (ge-base-label b)))
+       (hash-set! var-partition var
+                  (cons b (hash-ref! var-partition var (list)))))
+  (define copies
+    (for/list ([(x b) var-partition] #:when (= 1 (length b))) (ge-base-clone (first b))))
+  (append copies bases))
 
-;;; Given two words, represented as lists of components (generators and
-;;; variables), and a list of boundary selections ('B, 'L, 'R), construct a list
-;;; of generalized equations associating each component with its position among
-;;; the boundaries. Note: each GE is itself a list of bases.
-;;; TODO: Drop GEs which include an obviously invalid base, like a constant with
-;;; non-unit length.
-;;; Word Word -> [List-of GE]
-(define (eqn->ge-list left right)
-  (define possible-bound-lists (bounds (length left) (length right)))
-  (stream-map (λ (bs) (append (build-bases left (left-bounds bs))
-                              (build-bases right (right-bounds bs))))
-              possible-bound-lists))
+;;; Check whether a proposed boundary selection for a word would make a
+;;; generator base span multiple columns or includes the wrong number of
+;;; boundaries.
+(define (alignable? word bounds)
+  (cond [(not (= (length bounds) (add1 (length word)))) #f]
+        [(empty? word) #t]
+        [(gconst? (first word)) (and (= 1 (- (second bounds) (first bounds)))
+                                     (alignable? (rest word) (rest bounds)))]
+        [else (alignable? (rest word) (rest bounds))]))
 
+
+;;; Given two lists of word components (sequence variables and generator
+;;; constants), make a stream containing each generalized equation that can be
+;;; produced by aligning components. In "picky" mode, exclude any result
+;;; containing a generator base spanning multiple columns.
+;;; Word Word -> [Stream GE]
+(define (words->ge* left right [picky? #t])
+  (for/stream
+   ([bound-locs (bounds (length left) (length right))]
+    ;; Exclude any GE which would have a generator stretch across
+    ;; multiple columns.
+    #:when (or (not picky?)
+               (and (alignable? left (map add1 (left-bounds bound-locs)))
+                    (alignable? right (map add1 (right-bounds bound-locs))))))
+   (add-dummy-duals
+    (append (build-bases left (map add1 (left-bounds bound-locs)))
+            (build-bases right (map add1 (right-bounds bound-locs)))))))
 (module+ test
-  ;; For testing, not going to be picky about exact order of GEs in the stream
-  (check-equal? (list->set (stream->list
-                            (eqn->ge-list (list (svar 'x) 1)
-                                          (list 2 (svar 'x)))))
-                ;; BBB, BLRB, BRLB
-                (set (ge [(S x) (0 1)] [1 (1 2)] [2 (0 1)] [(S x) (1 2)])
-                     (ge [(S x) (0 1)] [1 (1 3)] [2 (0 2)] [(S x) (2 3)])
-                     (ge [(S x) (0 2)] [1 (2 3)] [2 (0 1)] [(S x) (1 3)]))))
+  (check-equal?
+   (stream->list (words->ge* (list 1 (svar 'x)) (list (svar 'x) 1)))
+   (list (ge [1 (1 2)] [(S x) (2 4)]
+             [(S x) (1 3)] [1 (3 4)])
+         (ge [1 (1 2)] [(S x) (2 3)]
+             [(S x) (1 2)] [1 (2 3)])))
+  (check-equal?
+   (stream->list (words->ge* (list 1 (svar 'x)) (list (svar 'x) 1) #f))
+   (list (ge [1 (1 2)] [(S x) (2 4)]
+             [(S x) (1 3)] [1 (3 4)])
+         (ge [1 (1 3)] [(S x) (3 4)]
+             [(S x) (1 2)] [1 (2 4)])
+         (ge [1 (1 2)] [(S x) (2 3)]
+             [(S x) (1 2)] [1 (2 3)]))))
+
+;;; Alternate version of words->ge* for use with simple quoted lists
+(define (lists->ge* left right [picky? #t])
+  (words->ge* (list->word left) (list->word right) picky?))
 
 
 ;;; Identify the carrier base in a generalized equation -- the largest leftmost

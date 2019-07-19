@@ -11,6 +11,7 @@
   (gconst? contract?)
   (generator? contract?)
   (word? contract?)
+  (list->word (-> (listof (or/c gconst? symbol?)) word?))
   (label-< (-> (or/c gconst? svar? gvar?)
                (or/c gconst? svar? gvar?)
                boolean?))
@@ -24,6 +25,7 @@
   (ge-base-clone (-> ge-base?
                      ge-base?))
   (ge-base-width (-> ge-base? natural?))
+  (ge-base-name (-> (or/c svar-base? pvar-base?) symbol?))
   (gconst-base (-> gconst? natural?
                    ge-base?))
   (gconst-base? contract?)
@@ -90,6 +92,12 @@
 ;;; alignment is chosen).
 (define word? (listof (or/c gconst? svar?)))
 
+;;; Convert a list of naturals and symbols into a Word. GConsts are kept as is,
+;;; symbols are turned into sequence variables, and other elements are dropped.
+(define (list->word xs)
+  (for/list ([x xs] #:when (or (symbol? x) (gconst? x)))
+            (if (symbol? x) (svar x) x)))
+
 (module+ test
   (for-each check-true
             (list (gconst? 0) (gconst? 9) (svar? (svar 'f))))
@@ -115,6 +123,11 @@
 ;;; Find the number of columns a GE Base spans
 (define (ge-base-width b)
   (- (right-bound b) (left-bound b)))
+
+;;; Find the symbolic name of a sequence or palimpsest variable base
+(define (ge-base-name b)
+  (cond [(svar-base? b) (svar-name (ge-base-label b))]
+        [(pvar-base? b) (pvar-name (ge-base-label b))]))
 
 ;;; Construct a constant base without passing both n and n+1
 (define (gconst-base c n) (ge-base c (vector n (add1 n))))
