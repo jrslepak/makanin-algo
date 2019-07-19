@@ -20,7 +20,14 @@
                           (and (<= lo1 hi1) (<= lo2 hi2))
                           [result (stream/c (-> natural? natural?))])]
   [partitions (-> natural?
-                  (stream/c (listof (listof natural?))))]))
+                  (stream/c (listof (listof natural?))))]
+  [subsets (-> sequence? (stream/c set?))
+           ;; Actually want something like this, but set/c doesn't seem to play
+           ;; nice with parametric contracts.
+           #;(parametric->/c
+              [T]
+              (-> (sequence/c T)
+                  (stream/c (set/c T))))]))
 
 
 ;;;; How can two sides of an equation can be put in alignment?
@@ -160,3 +167,11 @@
                (for/list ([section p]
                           [pos (length p)])
                          (if (= pos expansion) (cons new section) section)))))
+
+;;; Enumerate subsets of the given finite sequence with unique elements.
+;;; [Sequence T] -> [Stream [Set T]]
+(define (subsets s)
+  (for/fold ([all-subsets (list (set))])
+            ([elt s])
+    (stream-append all-subsets
+                   (for/stream ([subset all-subsets]) (set-add subset elt)))))

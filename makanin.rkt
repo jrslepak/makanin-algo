@@ -1,6 +1,7 @@
 #lang racket
 
-(require "generalized-eqn.rkt"
+(require racket/hash
+         "generalized-eqn.rkt"
          "enumerate.rkt"
          "diophantine.rkt"
          "ge-base.rkt")
@@ -96,17 +97,65 @@
   (for ([base ge] #:when (or (svar-base? base)
                              (pvar-base? base)))
        (let ([soln-vec (hash-ref soln (ge-base-name base))])
-         #;
-         (printf "\nHandling the base ~v\n" base)
          (for ([ge-col (in-range (left-bound base) (right-bound base))]
                [svar-col (in-range (right-bound base))])
-              #;
-              (printf "Updating position ~v in ~v with ~v\n"
-                      svar-col
-                      soln-vec
-                      (hash-ref col-soln ge-col #f))
               (vector-set! soln-vec svar-col
                            (or (vector-ref soln-vec svar-col)
                                (hash-ref col-soln ge-col #f))))))
 
   soln)
+
+;;; Produce all transport-derived solutions for a generalized equation.
+;;; GE -> [Stream Solution]
+(define (solve*-ge ge)
+  (define transport-results (transport* ge))
+  (define inez-solutions
+    (for/stream ([ge* transport-results])
+                (inez-check (merged-LDE-system ge*))))
+  (for/stream ([soln inez-solutions]
+               [ge* transport-results]
+               #:when (not (string-prefix? soln "unsat")))
+              (svar-soln ge* (interpret-soln soln))))
+;;; Variant: produce any solution for a GE, or #f if there is none.
+(define (solve-ge ge)
+  (for/first ([s (solve*-ge ge)]) s))
+
+;;; Given a free semigroup equation, consider the generalized equations which
+;;; can be produced from it (i.e., all possible alignments of its components),
+;;; and generate a stream containing a solution for each solvable GE. If none
+;;; are solvable, the resulting stream will be empty.
+;;; Since this procedure is specifically for a free semigroup, it is assumed
+;;; that no variable stands for the empty sequence.
+;;; [List [GConst U Symbol]] [List [GConst U Symbol]] -> [Stream Solution]
+(define (solve*-semigroup-eqn left right)
+  (for/fold ([all-solns (stream)])
+            ([ge (lists->ge* left right)])
+    (stream-append all-solns (solve*-ge ge))))
+;;; Variant: produce any solution for a free semigroup equation (#f if none).
+(define (solve-semigroup-eqn left right)
+  (for/first ([s (solve*-semigroup-eqn left right)]) s))
+
+;;; Given a free monoid equation, consider all possible semigroup equations that
+;;; might represent solutions to it. Each free semigroup equation comes from
+;;; dropping some subset of the sequence variables from the free monoid equation
+;;; and assuming they stand for the empty sequence.
+(define (solve*-monoid-eqn left right)
+  (define vars (set-union (for/set ([x left] #:when (symbol? x)) x)
+                          (for/set ([x right] #:when (symbol? x)) x)))
+  (define semigroup-solns
+    (for/fold ([all-solns (stream)])
+              ([empties (subsets vars)])
+      (define more-solns
+        (solve*-semigroup-eqn
+         (for/list ([x left]  #:when (not (set-member? empties x))) x)
+         (for/list ([x right] #:when (not (set-member? empties x))) x)))
+      (define empties-soln
+        (for/hash ([x empties])
+                  (values x (vector))))
+      (stream-append (for/stream ([s more-solns] #:when s)
+                                 (hash-union s empties-soln))
+                     all-solns)))
+  (for/stream ([soln semigroup-solns] #:when soln) soln))
+;;; Variant: produce any solution for a free monoid equation (#f if none).
+(define (solve-monoid-eqn left right)
+  (for/first ([s (solve*-monoid-eqn left right)]) s))
