@@ -6,6 +6,25 @@
          "diophantine.rkt"
          "ge-base.rkt")
 
+(provide
+ (contract-out
+  [solution? contract?]
+  [solve-monoid-eqn* (-> (listof (or/c symbol? gconst?))
+                         (listof (or/c symbol? gconst?))
+                         (stream/c solution?))]
+  [solve-monoid-eqn (-> (listof (or/c symbol? gconst?))
+                        (listof (or/c symbol? gconst?))
+                        (or/c solution? false?))]
+  [solve-semigroup-eqn* (-> (listof (or/c symbol? gconst?))
+                            (listof (or/c symbol? gconst?))
+                            (stream/c solution?))]
+  [solve-semigroup-eqn (-> (listof (or/c symbol? gconst?))
+                           (listof (or/c symbol? gconst?))
+                           (or/c solution? false?))]
+  [solve-ge* (-> ge? (stream/c solution?))]
+  [solve-ge (-> ge? (or/c solution? false?))]
+  [ge-sat? (-> ge? boolean?)]
+  [transport* (-> ge? (stream/c ge?))]))
 
 ;;; Given a generalized equation, produce a stream of all possible final results
 ;;; of using `transport' on the GE. If the carrier and dual have multiple
@@ -72,7 +91,7 @@
 ;;; The hash maps symbols (the names of sequence variables) to vectors of
 ;;; generator constants, except with #f appearing in positions where the GE does
 ;;; not require any specific constant.
-
+(define solution? (hash/c symbol? (vector/c (or/c gconst? false?))))
 
 ;;; After all rounds of transport are done, every base with a given variable
 ;;; should have the same column width, so every column in the GE can be
@@ -107,7 +126,7 @@
 
 ;;; Produce all transport-derived solutions for a generalized equation.
 ;;; GE -> [Stream Solution]
-(define (solve*-ge ge)
+(define (solve-ge* ge)
   (define transport-results (transport* ge))
   (define inez-solutions
     (for/stream ([ge* transport-results])
@@ -118,7 +137,7 @@
               (svar-soln ge* (interpret-soln soln))))
 ;;; Variant: produce any solution for a GE, or #f if there is none.
 (define (solve-ge ge)
-  (for/first ([s (solve*-ge ge)]) s))
+  (for/first ([s (solve-ge* ge)]) s))
 
 ;;; Given a free semigroup equation, consider the generalized equations which
 ;;; can be produced from it (i.e., all possible alignments of its components),
@@ -127,26 +146,27 @@
 ;;; Since this procedure is specifically for a free semigroup, it is assumed
 ;;; that no variable stands for the empty sequence.
 ;;; [List [GConst U Symbol]] [List [GConst U Symbol]] -> [Stream Solution]
-(define (solve*-semigroup-eqn left right)
+(define (solve-semigroup-eqn* left right)
   (for/fold ([all-solns (stream)])
             ([ge (lists->ge* left right)])
-    (stream-append all-solns (solve*-ge ge))))
+    (stream-append all-solns (solve-ge* ge))))
 ;;; Variant: produce any solution for a free semigroup equation (#f if none).
 (define (solve-semigroup-eqn left right)
-  (for/first ([s (solve*-semigroup-eqn left right)]) s))
+  (for/first ([s (solve-semigroup-eqn* left right)]) s))
 
 ;;; Given a free monoid equation, consider all possible semigroup equations that
 ;;; might represent solutions to it. Each free semigroup equation comes from
 ;;; dropping some subset of the sequence variables from the free monoid equation
 ;;; and assuming they stand for the empty sequence.
-(define (solve*-monoid-eqn left right)
+;;; [List [GConst U Symbol]] [List [GConst U Symbol]] -> [Stream Solution]
+(define (solve-monoid-eqn* left right)
   (define vars (set-union (for/set ([x left] #:when (symbol? x)) x)
                           (for/set ([x right] #:when (symbol? x)) x)))
   (define semigroup-solns
     (for/fold ([all-solns (stream)])
               ([empties (subsets vars)])
       (define more-solns
-        (solve*-semigroup-eqn
+        (solve-semigroup-eqn*
          (for/list ([x left]  #:when (not (set-member? empties x))) x)
          (for/list ([x right] #:when (not (set-member? empties x))) x)))
       (define empties-soln
@@ -158,4 +178,4 @@
   (for/stream ([soln semigroup-solns] #:when soln) soln))
 ;;; Variant: produce any solution for a free monoid equation (#f if none).
 (define (solve-monoid-eqn left right)
-  (for/first ([s (solve*-monoid-eqn left right)]) s))
+  (for/first ([s (solve-monoid-eqn* left right)]) s))
