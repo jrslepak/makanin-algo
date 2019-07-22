@@ -11,6 +11,7 @@
   [LDE-system (-> ge? gconst? LDE-system?)]
   [merged-LDE-system (-> ge? LDE-system?)]
   [admissible? (-> ge? boolean?)]
+  [singleton-alphabet-admissible? (-> ge? boolean?)]
   [inez-check (-> LDE-system? string?)]
   [inez-sat? (-> LDE-system? boolean?)]))
 
@@ -70,6 +71,16 @@
 (module+ test
   (check-true (admissible? SIMPLE-SAT))
   (check-false (admissible? SIMPLE-UNSAT)))
+
+;;; Would this GE be admissible if *every* generator constant were equal? Check
+;;; by giving every generator base the label 1 and then testing admissibility.
+;;; GE -> Boolean
+(define (singleton-alphabet-admissible? ge)
+  (admissible? (for/list ([base ge])
+                         (if (generator-base? base)
+                             (ge-base 1 (ge-base-boundaries base))
+                             base))))
+
 
 ;;; Construct the LDE systems for every constant appearing in a GE.
 ;;; GE -> [Listof LDE-system]
