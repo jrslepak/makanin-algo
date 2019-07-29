@@ -1,6 +1,7 @@
 #lang racket
 
-(require racket/hash
+(require data/union-find
+         racket/hash
          "generalized-eqn.rkt"
          "enumerate.rkt"
          "diophantine.rkt"
@@ -188,3 +189,40 @@
 ;;; Variant: produce any solution for a free monoid equation (#f if none).
 (define (solve-monoid-eqn left right [prune admissible?])
   (for/first ([s (solve-monoid-eqn* left right prune)]) s))
+
+
+;;; Given a GE with all transport steps completed, identify the minimal
+;;; equivalence relation on generators which would make the GE solvable.
+;;; GE -> [Listof [Setof GConst]]
+;;; TODO: Is there any additional tracking needed re: corresponding parts of
+;;; different variable bases with the same label?
+(define (minimal-equiv ge)
+  ;; Which generators appear in which columns?
+  (define column-contents (make-hash))
+  (for ([base ge]
+        #:when (gconst-base? base))
+       #;(printf "Column ~v contains ~v\n"
+                 (left-bound base) (ge-base-label base))
+       (hash-update! column-contents
+                     (left-bound base)
+                     (λ (consts) (set-add consts (ge-base-label base)))
+                     (set)))
+  #;(printf "Column Contents:\n~v\n" column-contents)
+  ;; Any two generators that appear in the same column must be equated.
+  (define uf-sets
+    (for/hash ([c (gconsts ge)])
+              (values c (uf-new c))))
+  (for ([(column contents) column-contents])
+       (define fst (set-first contents))
+       (for ([another contents]) (uf-union! (hash-ref uf-sets fst)
+                                            (hash-ref uf-sets another))))
+  #;(printf "Representatives:\n~v\n" uf-sets)
+  ;; Construct the equivalence classes from the union-find sets
+  (define eqv-classes (make-hash))
+  (for ([(label ufs) uf-sets])
+       (hash-update! eqv-classes
+                     (uf-find (hash-ref uf-sets label))
+                     (λ (equals) (set-add equals label))
+                     (set)))
+  #;(printf "Equivalence classes:\n~v\n" eqv-classes)
+  (for/list ([(k v) eqv-classes]) v))
