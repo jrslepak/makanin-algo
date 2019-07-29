@@ -110,23 +110,21 @@
 ;;; that position is underdetermined by the generalized equation and can be
 ;;; any sequence generator.
 ;;; GE [Hash Natural GeneratorConstant] -> Solution
-(define (svar-soln ge col-soln)
+(define (var-soln ge col-soln)
   ;; Determine the column widths of all sequence variables appearing in a GE
   ;; (there had better be only one width per var), and initialize a hash to map
-  ;; each svar to a mutable vector of corresponding width containing all #f.
-  (define soln (for/hash ([base ge] #:when (or (svar-base? base)
-                                               (pvar-base? base)))
+  ;; each var to a mutable vector of corresponding width containing all #f.
+  (define soln (for/hash ([base ge] #:when (var-base? base))
                          (values (ge-base-name base)
                                  (make-vector (ge-base-width base) #f))))
-  ;; For each svar base in the GE, update the corresponding solution vector
+  ;; For each var base in the GE, update the corresponding solution vector
   ;; with the corresponding column values.
-  (for ([base ge] #:when (or (svar-base? base)
-                             (pvar-base? base)))
+  (for ([base ge] #:when (var-base? base))
        (let ([soln-vec (hash-ref soln (ge-base-name base))])
          (for ([ge-col (in-range (left-bound base) (right-bound base))]
-               [svar-col (in-range (right-bound base))])
-              (vector-set! soln-vec svar-col
-                           (or (vector-ref soln-vec svar-col)
+               [var-col (in-range (right-bound base))])
+              (vector-set! soln-vec var-col
+                           (or (vector-ref soln-vec var-col)
                                (hash-ref col-soln ge-col #f))))))
 
   soln)
@@ -141,7 +139,7 @@
   (for/stream ([soln inez-solutions]
                [ge* transport-results]
                #:when (not (string-prefix? soln "unsat")))
-              (svar-soln ge* (interpret-soln soln))))
+              (var-soln ge* (interpret-soln soln))))
 ;;; Variant: produce any solution for a GE, or #f if there is none.
 (define (solve-ge ge [prune admissible?])
   (for/first ([s (solve-ge* ge prune)]) s))

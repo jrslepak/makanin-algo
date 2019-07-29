@@ -77,7 +77,7 @@
 ;;; GE -> Boolean
 (define (singleton-alphabet-admissible? ge)
   (admissible? (for/list ([base ge])
-                         (if (generator-base? base)
+                         (if (gconst-base? base)
                              (ge-base 1 (ge-base-boundaries base))
                              base))))
 
@@ -99,19 +99,19 @@
 ;;; each sequence variable used in a GE, equate the sums of the LDE variables
 ;;; associated with eachinterval of columns some base with that sequence
 ;;; variable spans.
-;;; GE -> [Listof LDE]
-(define (svar-LDEs ge)
-  ;; Sorting the svar worklist is not necessary but makes testing easier
-  (for/list ([svar (sort (set->list (svars ge))
-                         (λ (x y) (symbol<? (svar-name x) (svar-name y))))])
-            (for/list ([base (ge-bases/label ge svar)])
+;;; GE -> LDE-system
+(define (var-LDEs ge)
+  ;; Sorting the var worklist is not necessary but makes testing easier
+  (for/list ([var (sort (set->list (vars ge))
+                         (λ (x y) (symbol<? (var-name x) (var-name y))))])
+            (for/list ([base (ge-bases/label ge var)])
                       (span->LDE-sum (left-bound base)
                                      (right-bound base)))))
 (module+ test
-  (check-equal? (svar-LDEs SIMPLE-SAT)
+  (check-equal? (var-LDEs SIMPLE-SAT)
                 '([(col_1 col_2) (col_2 col_3)]))
-  (check-equal? (svar-LDEs SIMPLE-UNSAT) (svar-LDEs SIMPLE-SAT))
-  (check-equal? (svar-LDEs GUTIERREZ-EXAMPLE-PG8)
+  (check-equal? (var-LDEs SIMPLE-UNSAT) (var-LDEs SIMPLE-SAT))
+  (check-equal? (var-LDEs GUTIERREZ-EXAMPLE-PG8)
                 '([(col_1 col_2) (col_6 col_7)]
                   [(col_5 col_6 col_7) (col_1 col_2 col_3 col_4)]
                   [(col_3 col_4 col_5 col_6) (col_2 col_3 col_4)])))

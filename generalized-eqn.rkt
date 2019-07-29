@@ -31,8 +31,9 @@
                       ge?)]
   [ge-columns (-> ge? (listof natural?))]
   [svars (-> ge? (set/c svar?))]
+  [pvars (-> ge? (set/c pvar?))]
+  [vars (-> ge? (set/c var?))]
   [gconsts (-> ge? (set/c gconst?))]
-  [new-gvars (-> ge? (hash/c symbol? natural?))]
   [carrier (-> ge? (or/c ge-base? false?))]
   [critical-boundary (-> ge? natural?)]
   [transport-bases (-> ge? (listof ge-base?))]
@@ -141,11 +142,11 @@
 ;;; Identify which columns in a GE are not occupied by a generator base.
 ;;; GE -> [List-of natural]
 (define (empty-columns ge)
-  (define generator-bases
-    (for/list ([base ge] #:when (generator-base? base)) base))
+  (define gconst-bases
+    (for/list ([base ge] #:when (gconst-base? base)) base))
   (define all-columns (ge-columns ge))
   (define occupied-columns
-    (sort (for/list ([gb generator-bases]) (left-bound gb)) <))
+    (sort (for/list ([gb gconst-bases]) (left-bound gb)) <))
   ;; Step through the two sorted lists of columns
   (define (empty-columns* all occupied)
     (cond [(empty? all)
@@ -181,76 +182,21 @@
   (check-equal? (empty-columns (ge [(S a) (0 4)] [2 (4 5)] [1 (1 2)]))
                 '(0 2 3)))
 
-;;; Identify all sequence variables used in a GE.
+;;; Identify all ordinary sequence variables used in a GE.
 (define (svars ge)
   (for/set ([base ge] #:when (svar-base? base)) (ge-base-label base)))
+
+;;; Identify all palimpsest variables used in a GE.
+(define (pvars ge)
+  (for/set ([base ge] #:when (pvar-base? base)) (ge-base-label base)))
+
+;;; Identify all variables used in a GE.
+(define (vars ge)
+  (set-union (pvars ge) (svars ge)))
 
 ;;; Identify all generator constants used in a GE.
 (define (gconsts ge)
   (for/set ([base ge] #:when (gconst-base? base)) (ge-base-label base)))
-
-
-
-;;; Given a GE, construct GVar entries (up to one per column) such that every
-;;; column will have at least one GVar or GConst base. Construct a hash which
-;;; associates each new GVar entry with its original column location.
-;;; GE -> [Hash-of Symbol Natural]
-(define (new-gvars ge)
-  (define worklist (empty-columns ge))
-  (for/hash ([column worklist])
-            ;; For debugging, it might be helpful to have a name that reflects
-            ;; which column this generator variable is meant to cover.
-            (define new-name
-              (gensym (string-append "col_" (number->string column) "_")))
-            (values new-name column)))
-
-(module+ test
-  ;; Extract the debug-friendly base that was used to generate the GVar's name
-  (define (collapse-gvar g)
-    (gvar (string->symbol
-           (first
-            (regexp-match
-             #rx"col_[0-9]*"
-             (symbol->string (gvar-name g)))))))
-  
-  (define NEWVARS-A (new-gvars GUTIERREZ-EXAMPLE-A))
-  (check-equal? (sort (hash-values NEWVARS-A) <)
-                '(1 5))
-  (define NEWVARS-B (new-gvars GUTIERREZ-EXAMPLE-B))
-  (check-equal? (sort (hash-values NEWVARS-B) <)
-                '(1 4 7)))
-
-
-;;; Append a collection of GVars specified in a hash to an existing GE.
-;;; [Hash-of Symbol Natural] GE -> GE
-(define (add-gvars vs ge)
-  (append
-   (sort (for/list ([(var col) vs])
-                   (ge-base (gvar var) (vector col (add1 col))))
-         ge-<=)
-   ge))
-
-(module+ test
-  (define (collapse-gvar-bases ge)
-    (for/list ([base ge])
-              (if (gvar-base? base)
-                  (ge-base (collapse-gvar (ge-base-label base))
-                           (ge-base-boundaries base))
-                  base)))
-  
-  (define PADDED-A (add-gvars NEWVARS-A GUTIERREZ-EXAMPLE-A))
-  (check-equal? (collapse-gvar-bases PADDED-A)
-                (ge [(gvar 'col_1) (1 2)]
-                    [(gvar 'col_5) (5 6)]
-                    [(S x) (1 2)] [1 (2 3)] [2 (3 4)] [(S y) (4 6)]
-                    [(S y) (1 3)] [2 (3 4)] [1 (4 5)] [(S x) (5 6)]))
-  (define PADDED-B (add-gvars NEWVARS-B GUTIERREZ-EXAMPLE-B))
-  (check-equal? (collapse-gvar-bases PADDED-B)
-                (ge [(gvar 'col_1) (1 2)]
-                    [(gvar 'col_4) (4 5)]
-                    [(gvar 'col_7) (7 8)]
-                    [(S x) (1 5)] [1 (5 6)] [2 (6 7)] [(S y) (7 8)]
-                    [(S y) (1 2)] [2 (2 3)] [1 (3 4)] [(S x) (4 8)])))
 
 
 ;;; Given a list of word components and a list of boundary locations, produce a

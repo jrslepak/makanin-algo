@@ -6,20 +6,20 @@
 (provide
  (contract-out
   (struct svar ([name symbol?]))
-  (struct gvar ([name symbol?]))
   (struct pvar ([name symbol?]))
+  (var-name (-> (or/c svar? pvar?) symbol?))
   (gconst? contract?)
-  (generator? contract?)
+  (var? contract?)
   (word? contract?)
   (list->word (-> (listof (or/c gconst? symbol?)) word?))
-  (label-< (-> (or/c gconst? svar? gvar?)
-               (or/c gconst? svar? gvar?)
+  (label-< (-> (or/c gconst? svar?)
+               (or/c gconst? svar?)
                boolean?))
   (gconst-labels (-> (listof ge-base?)
                      (listof gconst?)))
   (svar-labels (-> (listof ge-base?)
                    (listof svar?)))
-  (struct ge-base ([label (or/c gconst? svar? gvar? pvar?)]
+  (struct ge-base ([label (or/c gconst? svar? pvar?)]
                    [boundaries (and/c (vectorof natural? #:immutable #f)
                                       nondecreasing?)]))
   (ge-base-clone (-> ge-base?
@@ -29,10 +29,9 @@
   (gconst-base (-> gconst? natural?
                    ge-base?))
   (gconst-base? contract?)
-  (gvar-base? contract?)
   (svar-base? contract?)
   (pvar-base? contract?)
-  (generator-base? contract?)
+  (var-base? contract?)
   (erase (-> ge-base? ge-base?))
   (left-bound (-> ge-base?
                   natural?))
@@ -52,12 +51,6 @@
  
 ;;; A GConst (generator constant) is a Nat
 (define (gconst? n) (natural? n))
-;;; A GVar (generator variable) is a (gvar symbol)
-(define-struct/contract gvar
-  ([name symbol?])
-  #:transparent)
-;;; A Generator is either a GConst or a GVar
-(define (generator? x) (or (gconst? x) (gvar? x)))
 ;;; An SVar (sequence variable) is an (svar symbol)
 (define-struct/contract svar
   ([name symbol?])
@@ -68,9 +61,13 @@
 (define-struct/contract pvar
   ([name symbol?])
   #:transparent)
+;;; Extract the name from any type of variable
+(define (var-name v)
+  (if (svar? v) (svar-name v) (pvar-name v)))
+(define var? (or/c svar? pvar?))
 
-;;; Ordering on GConsts, GVars, and SVars.
-;;; any GConst < any GVar < any SVar < any PVar
+;;; Ordering on GConsts, and SVars.
+;;; any GConst < any SVar < any PVar
 ;;; Within each class, ties are resolved by numeric or lexical comparison
 (define (label-< x y)
   (cond [(and (gconst? x) (gconst? y))
@@ -79,17 +76,13 @@
          (symbol<? (svar-name x) (svar-name y))]
         [(and (pvar? x) (pvar? y))
          (symbol<? (pvar-name x) (pvar-name y))]
-        [(and (gvar? x) (gvar? y))
-         (symbol<? (gvar-name x) (gvar-name y))]
         [(gconst? x) #t]
-        [(gvar? x) (or (svar? y) (pvar? y))]
         [(svar? x) (pvar? y)]
         [else #f]))
 
 ;;; A Word is a [List [U GConst SVar]]
-;;; Since this represents a fragment of an equation, we exclude GVars. They are
-;;; only to be introduced into a generalized equation (generated after an
-;;; alignment is chosen).
+;;; Since this represents a fragment of an equation, we exclude PVars. They are
+;;; only to be introduced into a generalized equation during transport.
 (define word? (listof (or/c gconst? svar?)))
 
 ;;; Convert a list of naturals and symbols into a Word. GConsts are kept as is,
@@ -105,7 +98,7 @@
             (list (gconst? -2) (gconst? (svar 'f)) (svar? 0) (svar? 9) (svar? -2)))
   (check-true (word? (list 1 (svar 's) 4 (svar 'w))))
   (check-false (word? (list 6 (svar 'a) -4)))
-  (check-false (word? (list 1 (svar 's) 4 (gvar 'w)))))
+  (check-false (word? (list 1 (svar 's) 4 (pvar 'w)))))
 
 
 ;;; A Generalized Equation Base ("GE Base") is one of
@@ -113,7 +106,7 @@
 ;;; - (ge-base Var [List-of Nat])  where the list is nondecreasing
 ;;;     and has length >= 2
 (define-struct/contract ge-base
-  ([label (or/c gconst? svar? gvar? pvar?)]
+  ([label (or/c gconst? svar? pvar?)]
    [boundaries (and/c (vectorof natural? #:immutable #f) nondecreasing?)])
   #:transparent)
 (define (ge-base-clone base)
@@ -144,10 +137,8 @@
 ;;; gen var label? palimpsest var label?
 (define (gconst-base? b) (and (ge-base? b) (gconst? (ge-base-label b))))
 (define (svar-base? b) (and (ge-base? b) (svar? (ge-base-label b))))
-(define (gvar-base? b) (and (ge-base? b) (gvar? (ge-base-label b))))
 (define (pvar-base? b) (and (ge-base? b) (pvar? (ge-base-label b))))
-(define (generator-base? b) (or (gconst-base? b) (gvar-base? b)))
-
+(define (var-base? b) (or (svar-base? b) (pvar-base? b)))
 
 (module+ test
   (check-true (gconst-base? (gconst-base 5 0)))
