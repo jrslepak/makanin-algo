@@ -135,7 +135,7 @@
   (define transport-results (transport* ge prune))
   (define inez-solutions
     (for/stream ([ge* transport-results])
-                (inez-check (merged-LDE-system ge*))))
+                (inez-check (merged-LDE-system ge* #t))))
   (for/stream ([soln inez-solutions]
                [ge* transport-results]
                #:when (not (string-prefix? soln "unsat")))

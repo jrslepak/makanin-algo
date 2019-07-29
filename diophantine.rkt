@@ -9,7 +9,8 @@
   [LDE-system? contract?]
   [LDE-systems (-> ge? (listof LDE-system?))]
   [LDE-system (-> ge? gconst? LDE-system?)]
-  [merged-LDE-system (-> ge? LDE-system?)]
+  [merged-LDE-system (->* [ge?] [boolean?]
+                          LDE-system?)]
   [admissible? (-> ge? boolean?)]
   [singleton-alphabet-admissible? (-> ge? boolean?)]
   [inez-check (-> LDE-system? string?)]
@@ -91,8 +92,8 @@
 ;;; chosen constant does not actually appear in the GE, the resulting system
 ;;; will be trivially solvable.
 ;;; GE GeneratorConstant -> LDE-system
-(define (LDE-system ge c)
-  (append (svar-LDEs ge)
+(define (LDE-system ge c [column-complete? #f])
+  (append (if column-complete? (var-column-LDEs ge) (var-LDEs ge))
           (gconst-LDEs ge c)))
 
 ;;; Construct the LDEs associated with sequence variable bases in a GE. For
@@ -115,6 +116,16 @@
                 '([(col_1 col_2) (col_6 col_7)]
                   [(col_5 col_6 col_7) (col_1 col_2 col_3 col_4)]
                   [(col_3 col_4 col_5 col_6) (col_2 col_3 col_4)])))
+;;; Variant of var-LDEs where every base with a given variable has the same
+;;; column width. Instead of equating sums of column variables, equate
+;;; corresponding single column variables.
+;;; GE -> LDE-system
+(define (var-column-LDEs ge)
+  (for*/list ([var (sort (set->list (vars ge))
+                          (λ (x y) (symbol<? (var-name x) (var-name y))))]
+              [offset (ge-base-width (first (ge-bases/label ge var)))])
+             (for/list ([base (ge-bases/label ge var)])
+                       (list (col->LDE-var (+ offset (left-bound base)))))))
 
 ;;; Construct a single LDE that merges all single-constant LDEs.
 ;;; Once transport is finished, use this to construct a solution. The solution,
@@ -126,7 +137,7 @@
 ;;; A single-generator system can be seen as a candidate for an unsatisfiable
 ;;; core of this larger system (though likely not a *minimal* one).
 ;;; GE -> LDE
-(define (merged-LDE-system ge)
+(define (merged-LDE-system ge [column-complete? #f])
   ;; Like map, but apply the function to every atom in a nested list
   (define (map* f xs)
     (cond [(empty? xs) '()]
@@ -138,18 +149,27 @@
     (cond [(string? x) (string-append x t)]
           [(symbol? x) (string->symbol (string-append (symbol->string x) t))]
           [else x]))
+  ;; If there is still some column expansion left to do, use the standard method
+  ;; for generating the sequence variables' LDEs. If the caller promises that
+  ;; all column expansion is done, then instead of summing each variable base's
+  ;; columns' values and equating sums corresponding to the same variable, we
+  ;; can equate corresponding columns of each variable's bases.
   (define single-LDEs
-    (for/list ([c (gconsts ge)])
-              (map* (tag-var (string-append "_" (number->string c)))
-                    (LDE-system ge c))))
-  ;; Require the sum of each column's generator variables to be 1
+    (apply append
+           (for/list ([c (gconsts ge)])
+                     (map* (tag-var (string-append "_" (number->string c)))
+                           (LDE-system ge c column-complete?)))))
+  ;; If all column expansion is done, require the sum of each column's generator
+  ;; variables to be 1.
   (define col-sums
-    (for/list ([col (ge-columns ge)])
-              (list '(1)
-                    (for/list ([gc (gconsts ge)])
-                              ((tag-var (string-append "_" (number->string gc)))
-                               (col->LDE-var col))))))
-  (apply append col-sums single-LDEs))
+    (if column-complete?
+        (for/list ([col (ge-columns ge)])
+                  (list '(1)
+                        (for/list ([gc (gconsts ge)])
+                                  ((tag-var (string-append "_" (number->string gc)))
+                                   (col->LDE-var col)))))
+        '()))
+  (append col-sums single-LDEs))
 
 ;;; Construct the LDEs associated with a particular constant in a GE.
 ;;; GE GeneratorConstant -> [Listof LDE]
