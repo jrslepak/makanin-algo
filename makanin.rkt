@@ -44,21 +44,21 @@
   ;; Identify the carrier and dual (if none, return singleton stream)
   (define c (carrier ge))
   (cond [(not c) (stream ge)]
+        ;; Exclude this result if any generator base spans multiple columns
+        [(for/or ([base ge])
+                 (and (gconst-base? base)
+                      (not (= 1 (ge-base-width base)))))
+         (stream)]
         ;; Exclude this result if an associated linear Diophantine equation
         ;; system has no solution.
         [(not (prune ge)) (stream)]
-        ;; Exclude this result if any generator base spans multiple columns
-        [(for/or ([base ge])
-                 (and (generator-base? base)
-                      (not (= 1 (ge-base-width base)))))
-         (stream)]
         [else
          (let* ([d (earliest-duplicate c ge)]
                 ;; Enumerate the possible column-relabeling functions
                 ;; - if carrier is shorter than dual,
-                ;;     enumerate functions from carrier range to dual range
+                ;;     enumerate fns : carrier range -> dual range
                 ;; - if carrier is longer than dual, 
-                ;;     enumerate functions from dual range to expanded dual range
+                ;;     enumerate fns : dual range -> expanded dual range
                 [relabelers
                  (if (<= (ge-base-width c)
                          (ge-base-width d))

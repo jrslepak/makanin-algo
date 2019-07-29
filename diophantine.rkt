@@ -68,7 +68,7 @@
 ;;; Diophantine equations is solvable.
 ;;; GE -> Boolean
 (define (admissible? ge)
-  (for/and ([ldes (LDE-systems ge)]) (inez-sat? ldes)))
+  (inez-sat? (merged-LDE-system ge)))
 (module+ test
   (check-true (admissible? SIMPLE-SAT))
   (check-false (admissible? SIMPLE-UNSAT)))
@@ -214,7 +214,6 @@
                 (find-executable-path "inez.opt")
                 script-file))
   (define inez-result (port->string inez-stdout))
-  #;(printf "Inez result:\n~a\n\n" inez-result)
   inez-result)
 
 ;;; Does Inez say this LDE system is satisfiable?
