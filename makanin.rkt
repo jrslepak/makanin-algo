@@ -74,14 +74,15 @@
                 ;; Recur on each element of single-step result stream
                 [new-geqns (for/stream ([r relabelers])
                                        (transport ge c d r))])
+           (printf "Proceeding...\n")
            (for/fold ([completed-geqns (stream)])
                      ([stepped new-geqns])
-             (stream-append completed-geqns (transport* stepped))))]))
+             (stream-append completed-geqns (transport* stepped prune))))]))
 
 ;;; Is this generalized equation solvable?
 ;;; GE [Optional: GE -> Boolean] -> Boolean
 (define (ge-sat? ge [prune admissible?])
-  (stream-empty? (transport* ge prune)))
+  (not (stream-empty? (transport* ge prune))))
 
 ;;; Interpret a solution provided by Inez.
 ;;; String -> [Hash Natural [GeneratorConstant U #f]] U #f
