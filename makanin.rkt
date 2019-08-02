@@ -5,7 +5,8 @@
          "generalized-eqn.rkt"
          "enumerate.rkt"
          "diophantine.rkt"
-         "ge-base.rkt")
+         "ge-base.rkt"
+         "utils.rkt")
 
 (provide
  (contract-out
@@ -203,10 +204,9 @@
         #:when (gconst-base? base))
        #;(printf "Column ~v contains ~v\n"
                  (left-bound base) (ge-base-label base))
-       (hash-update! column-contents
+       (hash-extend! column-contents
                      (left-bound base)
-                     (λ (consts) (set-add consts (ge-base-label base)))
-                     (set)))
+                     (ge-base-label base)))
   #;(printf "Column Contents:\n~v\n" column-contents)
   ;; Any two generators that appear in the same column must be equated.
   (define uf-sets
@@ -220,9 +220,8 @@
   ;; Construct the equivalence classes from the union-find sets
   (define eqv-classes (make-hash))
   (for ([(label ufs) uf-sets])
-       (hash-update! eqv-classes
+       (hash-extend! eqv-classes
                      (uf-find (hash-ref uf-sets label))
-                     (λ (equals) (set-add equals label))
-                     (set)))
+                     label))
   #;(printf "Equivalence classes:\n~v\n" eqv-classes)
   (for/list ([(k v) eqv-classes]) v))
