@@ -195,18 +195,34 @@
 ;;; Given a GE with all transport steps completed, identify the minimal
 ;;; equivalence relation on generators which would make the GE solvable.
 ;;; GE -> [Listof [Setof GConst]]
-;;; TODO: Is there any additional tracking needed re: corresponding parts of
-;;; different variable bases with the same label?
-(define (minimal-equiv ge)
+(define (minimal-equiv ge) ; [Hash Symbol GE-base]
+  ;; Pick a "canonical" occurrence of each variable
+  (define last-occurrences
+    (for/hash ([base ge] #:when (var-base? base))
+              (values (ge-base-name base) base)))
+  ;; Which columns are aliased due to appearing at the same internal position
+  ;; in two bases labeled with the same variable?
+  (define column-aliases (make-hash)) ; [Hash Natural [Set Natural]]
+  (for ([col (ge-columns ge)])
+       (hash-extend! column-aliases col col))
+  (for ([base ge] #:when (var-base? base))
+       (for ([offset (ge-base-width base)])
+            (define here (+ offset (left-bound base)))
+            (define there
+              (+ offset (left-bound
+                         (hash-ref last-occurrences (ge-base-name base)))))
+            (hash-extend! column-aliases here there)
+            (hash-extend! column-aliases there here)))
+  #;(printf "Column aliasing:\n~v\n\n" column-aliases)
   ;; Which generators appear in which columns?
-  (define column-contents (make-hash))
+  (define column-contents (make-hash)) ; [Hash Natural [Set GConst]]
   (for ([base ge]
         #:when (gconst-base? base))
-       #;(printf "Column ~v contains ~v\n"
-                 (left-bound base) (ge-base-label base))
-       (hash-extend! column-contents
-                     (left-bound base)
-                     (ge-base-label base)))
+       #;(printf "Columns ~v contain ~v\n"
+                 (hash-ref column-aliases (left-bound base))
+                 (ge-base-label base))
+       (for ([c (hash-ref column-aliases (left-bound base))])
+        (hash-extend! column-contents c (ge-base-label base))))
   #;(printf "Column Contents:\n~v\n" column-contents)
   ;; Any two generators that appear in the same column must be equated.
   (define uf-sets

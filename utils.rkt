@@ -1,6 +1,7 @@
 #lang racket
 
 (provide leftmost rightmost
+         hash-extend! hash-extend*!
          nondecreasing? 
          sym-counts/flat sym-counts
          remove-consecutive-duplicates
@@ -13,6 +14,15 @@
 (define (leftmost xs) (for/first ([x xs]) x))
 ;;; Rightmost element of a boundary sequence
 (define (rightmost xs) (for/last ([x xs]) x))
+
+;;; In a mutable hash whose values are sets, add a new element to some key's
+;;; set. If that key does not already exist, map it to a singleton set (i.e.,
+;;; treat it as though it were previously mapped to the empty set).
+(define (hash-extend! h k v)
+  (hash-update! h k (λ (old) (set-add old v)) (set)))
+;;; As in hash-extend!, but take a sequence of things to add into the mapped set.
+(define (hash-extend*! h k vs)
+  (for ([v vs]) (hash-extend! h k v)))
 
 ;;; Check whether a list's elements only increase
 (define (nondecreasing? xs)
