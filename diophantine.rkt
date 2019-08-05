@@ -244,7 +244,10 @@
   (define decls (for/list ([var vars])
                           (string-append "let "
                                          (symbol->string var)
-                                         " = fresh_int_var () ;;")))
+                                         " = fresh_int_var () ;;\n"
+                                         "constrain (~logic ("
+                                         (symbol->string var) ">= 0"
+                                         ")) ;;")))
   (string-join decls "\n"))
 
 ;;; Generate Inez code that prints the solution for each variable in an LDE
