@@ -11,6 +11,13 @@
 (provide
  (contract-out
   [solution? contract?]
+  [eqv-reln? (-> contract? contract?)]
+  [monoid-results (parametric->/c
+                   [T]
+                   (-> (listof (or/c symbol? gconst?))
+                       (listof (or/c symbol? gconst?))
+                       (-> ge? T)
+                       (stream/c T)))]
   [solve-monoid-eqn* (->* [(listof (or/c symbol? gconst?))
                            (listof (or/c symbol? gconst?))]
                           [(-> ge? boolean?)]
@@ -19,6 +26,15 @@
                           (listof (or/c symbol? gconst?))]
                          [(-> ge? boolean?)]
                          (or/c solution? false?))]
+  [solve-monoid-eqn*/t (-> (listof (or/c symbol? gconst?))
+                           (listof (or/c symbol? gconst?))
+                           (stream/c (list/c solution? eqv-reln?)))]
+  [semigroup-results (parametric->/c
+                      [T]
+                      (-> (listof (or/c symbol? gconst?))
+                          (listof (or/c symbol? gconst?))
+                          (-> ge? T)
+                          (stream/c T)))]
   [solve-semigroup-eqn* (->* [(listof (or/c symbol? gconst?))
                               (listof (or/c symbol? gconst?))]
                              [(-> ge? boolean?)]
@@ -27,6 +43,9 @@
                              (listof (or/c symbol? gconst?))]
                             [(-> ge? boolean?)]
                             (or/c solution? false?))]
+  [solve-semigroup-eqn*/t (-> (listof (or/c symbol? gconst?))
+                              (listof (or/c symbol? gconst?))
+                              (stream/c (list/c solution? eqv-reln?)))]
   [solve-ge* (->* [ge?] [(-> ge? boolean?)]
                   (stream/c solution?))]
   [solve-ge (->* [ge?] [(-> ge? boolean?)]
@@ -76,7 +95,6 @@
                 ;; Recur on each element of single-step result stream
                 [new-geqns (for/stream ([r relabelers])
                                        (transport ge c d r))])
-           (printf "Proceeding...\n")
            (for/fold ([completed-geqns (stream)])
                      ([stepped new-geqns])
              (stream-append completed-geqns (transport* stepped prune))))]))
@@ -102,6 +120,11 @@
 ;;; generator constants, except with #f appearing in positions where the GE does
 ;;; not require any specific constant.
 (define solution? (hash/c symbol? (vector/c (or/c gconst? false?))))
+
+;;; An EqvReln on some datatype T is a
+;;;   [Listof [Set T]]
+;;; where no T appears in multiple sets.
+(define (eqv-reln? T?) (listof (set/c T?)))
 
 ;;; After all rounds of transport are done, every base with a given variable
 ;;; should have the same column width, so every column in the GE can be
@@ -146,51 +169,110 @@
 ;;; Variant: produce any solution for a GE, or #f if there is none.
 (define (solve-ge ge [prune admissible?])
   (for/first ([s (solve-ge* ge prune)]) s))
+;;; Variant: produces the minimal equivalence relation which makes each
+;;; candidate solution acceptable.
+(define (solve-ge*/t ge)
+  (define ((canonicalize eqv-reln) base)
+    (if (gconst-base? base)
+        (for/first ([eqv-class eqv-reln]
+                    #:when (set-member? eqv-class (ge-base-label base)))
+                   (ge-base (set-first eqv-class)
+                            (ge-base-boundaries base)))
+        base))
+  (define transport-results (transport* ge singleton-alphabet-admissible?))
+  (define eqv-relns
+    (for/stream ([ge* transport-results])
+                (define meqv (minimal-equiv ge*))
+                meqv))
+  (define inez-solutions
+    (for/stream ([ge* transport-results]
+                 [eqv-reln eqv-relns])
+                (define soln
+                  (inez-check
+                   (merged-LDE-system (map (canonicalize eqv-reln) ge*) #t)))
+                soln))
+  (for/stream ([soln inez-solutions]
+               [ge* transport-results]
+               [eqv-reln eqv-relns]
+               #:when (not (string-prefix? soln "unsat")))
+              (list (var-soln ge* (interpret-soln soln))
+                    eqv-reln)))
+
 
 ;;; Given a free semigroup equation, consider the generalized equations which
 ;;; can be produced from it (i.e., all possible alignments of its components),
-;;; and generate a stream containing a solution for each solvable GE. If none
-;;; are solvable, the resulting stream will be empty.
+;;; and process each with the passed-in solver procedure. This is the core
+;;; solution-collecting logic for handling semigroup equations.
 ;;; Since this procedure is specifically for a free semigroup, it is assumed
 ;;; that no variable stands for the empty sequence.
+;;; [List [GConst U Symbol]] [List [GConst U Symbol]] [GE -> T] -> [Stream T]
+(define (semigroup-results left right ge->solns)
+  (for/fold ([all-solns (stream)])
+            ([ge (lists->ge* left right)])
+    (stream-append all-solns (ge->solns ge))))
+;;; Produce a stream of all solutions.
 ;;; [List [GConst U Symbol]] [List [GConst U Symbol]] [Optional: GE -> Boolean]
 ;;; -> [Stream Solution]
 (define (solve-semigroup-eqn* left right [prune admissible?])
-  (for/fold ([all-solns (stream)])
-            ([ge (lists->ge* left right)])
-    (stream-append all-solns (solve-ge* ge prune))))
-;;; Variant: produce any solution for a free semigroup equation (#f if none).
+  (semigroup-results left right (λ (ge) (solve-ge* ge prune))))
+;;; Produce any solution for a free semigroup equation (#f if none).
+;;; [List [GConst U Symbol]] [List [GConst U Symbol]] [Optional: GE -> Boolean]
+;;; -> Solution
 (define (solve-semigroup-eqn left right [prune admissible?])
   (for/first ([s (solve-semigroup-eqn* left right prune)]) s))
+;;; Produce a stream of solutions, each accompanied by the minimal equivalence
+;;; relation that makes the solution acceptable.
+;;; [List [GConst U Symbol]] [List [GConst U Symbol]]
+;;; -> [Stream [List Solution [EqvReln GConst]]]
+(define (solve-semigroup-eqn*/t left right)
+  (semigroup-results left right solve-ge*/t))
+
 
 ;;; Given a free monoid equation, consider all possible semigroup equations that
 ;;; might represent solutions to it. Each free semigroup equation comes from
 ;;; dropping some subset of the sequence variables from the free monoid equation
 ;;; and assuming they stand for the empty sequence.
-;;; [List [GConst U Symbol]] [List [GConst U Symbol]] [Optional: GE -> Boolean]
-;;; -> [Stream Solution]
-(define (solve-monoid-eqn* left right [prune admissible?])
+;;; [List [GConst U Symbol]] [List [GConst U Symbol]]
+;;; [[List [GConst U Symbol]] [List [GConst U Symbol]] -> [Stream T]]
+;;; [T Solution -> T]
+;;; -> [Stream T]
+(define (monoid-results left right semigroup-eqn->solns merge)
   (define vars (set-union (for/set ([x left] #:when (symbol? x)) x)
                           (for/set ([x right] #:when (symbol? x)) x)))
-  (define semigroup-solns
+  (define semigroup-solns   ; [Stream T]
     (for/fold ([all-solns (stream)])
               ([empties (subsets vars)])
-      (define more-solns
-        (solve-semigroup-eqn*
+      (define more-solns    ; [Stream T]
+        (semigroup-eqn->solns
          (for/list ([x left]  #:when (not (set-member? empties x))) x)
-         (for/list ([x right] #:when (not (set-member? empties x))) x)
-         prune))
-      (define empties-soln
+         (for/list ([x right] #:when (not (set-member? empties x))) x)))
+      (define empties-soln  ; Solution
         (for/hash ([x empties])
                   (values x (vector))))
       (stream-append (for/stream ([s more-solns] #:when s)
-                                 (hash-union s empties-soln))
+                                 (merge s empties-soln))
                      all-solns)))
-  (for/stream ([soln semigroup-solns] #:when soln) soln))
-;;; Variant: produce any solution for a free monoid equation (#f if none).
+  ;; TODO: old code explicitly filtered #f entries out of this stream -- why?
+  semigroup-solns)
+;;; Produce a stream of solutions.
+;;; [List [GConst U Symbol]] [List [GConst U Symbol]] [Optional: GE -> Boolean]
+;;; -> [Stream Solution]
+(define (solve-monoid-eqn* left right [prune admissible?])
+  (monoid-results left right (λ (l r) (solve-semigroup-eqn* l r prune)) hash-union))
+;;; Produce any solution for a free monoid equation (#f if none).
+;;; [List [GConst U Symbol]] [List [GConst U Symbol]] [Optional: GE -> Boolean]
+;;; -> Solution
 (define (solve-monoid-eqn left right [prune admissible?])
   (for/first ([s (solve-monoid-eqn* left right prune)]) s))
-
+;;; Produce a stream of solutions, each accompanied by the associated minimal
+;;; equivalence relation.
+;;; [List [GConst U Symbol]] [List [GConst U Symbol]]
+;;; -> [Stream [List Solution [EqvReln GConst]]]
+(define (solve-monoid-eqn*/t left right)
+  (monoid-results left right solve-semigroup-eqn*/t
+                  (λ (soln/eqv empties)
+                    (list (hash-union (first soln/eqv) empties)
+                          (second soln/eqv)))))
 
 ;;; Given a GE with all transport steps completed, identify the minimal
 ;;; equivalence relation on generators which would make the GE solvable.
