@@ -295,17 +295,12 @@
                          (hash-ref last-occurrences (ge-base-name base)))))
             (hash-extend! column-aliases here there)
             (hash-extend! column-aliases there here)))
-  #;(printf "Column aliasing:\n~v\n\n" column-aliases)
   ;; Which generators appear in which columns?
   (define column-contents (make-hash)) ; [Hash Natural [Set GConst]]
   (for ([base ge]
         #:when (gconst-base? base))
-       #;(printf "Columns ~v contain ~v\n"
-                 (hash-ref column-aliases (left-bound base))
-                 (ge-base-label base))
        (for ([c (hash-ref column-aliases (left-bound base))])
         (hash-extend! column-contents c (ge-base-label base))))
-  #;(printf "Column Contents:\n~v\n" column-contents)
   ;; Any two generators that appear in the same column must be equated.
   (define uf-sets
     (for/hash ([c (gconsts ge)])
@@ -314,12 +309,10 @@
        (define fst (set-first contents))
        (for ([another contents]) (uf-union! (hash-ref uf-sets fst)
                                             (hash-ref uf-sets another))))
-  #;(printf "Representatives:\n~v\n" uf-sets)
   ;; Construct the equivalence classes from the union-find sets
   (define eqv-classes (make-hash))
   (for ([(label ufs) uf-sets])
        (hash-extend! eqv-classes
                      (uf-find (hash-ref uf-sets label))
                      label))
-  #;(printf "Equivalence classes:\n~v\n" eqv-classes)
   (for/list ([(k v) eqv-classes]) v))
