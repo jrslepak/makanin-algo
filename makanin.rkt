@@ -11,7 +11,7 @@
 (provide
  (contract-out
   [solution? contract?]
-  [eqv-reln? (-> contract? contract?)]
+  [eqv-reln/c (-> contract? contract?)]
   [monoid-results (parametric->/c
                    [T]
                    (-> (listof (or/c symbol? gconst?))
@@ -28,7 +28,7 @@
                          (or/c solution? false?))]
   [solve-monoid-eqn*/t (-> (listof (or/c symbol? gconst?))
                            (listof (or/c symbol? gconst?))
-                           (stream/c (list/c solution? eqv-reln?)))]
+                           (stream/c (list/c solution? (eqv-reln/c gconst?))))]
   [semigroup-results (parametric->/c
                       [T]
                       (-> (listof (or/c symbol? gconst?))
@@ -45,7 +45,7 @@
                             (or/c solution? false?))]
   [solve-semigroup-eqn*/t (-> (listof (or/c symbol? gconst?))
                               (listof (or/c symbol? gconst?))
-                              (stream/c (list/c solution? eqv-reln?)))]
+                              (stream/c (list/c solution? (eqv-reln/c gconst?))))]
   [solve-ge* (->* [ge?] [(-> ge? boolean?)]
                   (stream/c solution?))]
   [solve-ge (->* [ge?] [(-> ge? boolean?)]
@@ -124,7 +124,7 @@
 ;;; An EqvReln on some datatype T is a
 ;;;   [Listof [Set T]]
 ;;; where no T appears in multiple sets.
-(define (eqv-reln? T?) (listof (set/c T?)))
+(define (eqv-reln/c T?) (listof (set/c T?)))
 
 ;;; After all rounds of transport are done, every base with a given variable
 ;;; should have the same column width, so every column in the GE can be
