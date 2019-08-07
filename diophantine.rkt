@@ -214,6 +214,9 @@
                 (find-executable-path "inez.opt")
                 script-file))
   (define inez-result (port->string inez-stdout))
+  (close-output-port inez-stdin)
+  (close-input-port inez-stdout)
+  (close-input-port inez-stderr)
   inez-result)
 
 ;;; Does Inez say this LDE system is satisfiable?
