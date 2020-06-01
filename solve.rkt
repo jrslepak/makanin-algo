@@ -80,17 +80,63 @@
                 ;;     enumerate fns : carrier range -> dual range
                 ;; - if carrier is longer than dual, 
                 ;;     enumerate fns : dual range -> expanded dual range
+                [first-pass-relabelers
+                 (cond [(<= (ge-base-width c)
+                            (ge-base-width d))
+                        ;; Add new boundaries in the carrier's zone
+                        (monotonic-maps/fn (left-bound c) (right-bound c)
+                                           (left-bound c) (+ (left-bound c)
+                                                             (ge-base-width d)))]
+                       [else
+                        ;; Add new boundaries in the dual's zone
+                        (monotonic-maps/fn (left-bound d) (right-bound d)
+                                           (left-bound d) (+ (left-bound d)
+                                                             (ge-base-width c)))])]
+                ;; Identify the range in which carrier and dual overlap
+                [overlap-left (left-bound d)]
+                [overlap-right (max (right-bound c) overlap-left)]
+                ;; Identify where new boundaries must be added in order to make
+                ;; up for boundaries added in the overlap zone. If the carrier
+                ;; is wider than the dual, the new boundaries belong in the
+                ;; portion of the dual to the right of the overlap. If the
+                ;; carrier is narrower, the new boundaries belong in the portion
+                ;; of the carrier to the left of the overlap.
+                [past-overlap-left (if (> (ge-base-width c) (ge-base-width d))
+                                       (right-bound c)
+                                       (left-bound c))]
+                [past-overlap-right (if (> (ge-base-width c) (ge-base-width d))
+                                        (right-bound d)
+                                        (left-bound d))]
                 [relabelers
-                 (if (<= (ge-base-width c)
-                         (ge-base-width d))
-                     ;; Add new boundaries in the carrier's zone
-                     (monotonic-maps/fn (left-bound c) (right-bound c)
-                                        (left-bound c) (+ (left-bound c)
-                                                          (ge-base-width d)))
-                     ;; Add new boundaries in the dual's zone
-                     (monotonic-maps/fn (left-bound d) (right-bound d)
-                                        (left-bound d) (+ (left-bound d)
-                                                          (ge-base-width c))))]
+                 (for/fold ([accum (stream)])
+                           ([f first-pass-relabelers])
+                   (cond
+                     ;; If carrier and dual have identical bounds, use f as is
+                     [(and (= (left-bound c) (left-bound d))
+                           (= (right-bound c) (right-bound d)))
+                      (stream-cons f accum)]
+                     ;; If there is no overlap, just use f as is
+                     [(<= (right-bound c) (left-bound d))
+                      #;(printf "Carrier ~v and dual ~v are disjoint\n" c d)
+                      (stream-cons f accum)]
+                     [else
+                      #;(printf "Carrier ~v and dual ~v partially overlap...\n" c d)
+                      ;; How much does this relabeler widen the overlap?
+                      (define overlap-growth
+                        (- (- (f overlap-right) (f overlap-left))
+                           (- overlap-right overlap-left)))
+                      #;(printf "This relabeler grows the overlap zone by ~v\n"
+                                overlap-growth)
+                      ;; We need to widen the past-overlap by the same amount,
+                      ;; but there might be several ways to do that.
+                      (define second-pass-relabelers
+                        (monotonic-maps/fn
+                         (f past-overlap-left) (f past-overlap-right)
+                         (f past-overlap-left) (+ (f past-overlap-right)
+                                                  overlap-growth)))
+                      (stream-append
+                       (for/stream ([g second-pass-relabelers]) (compose g f))
+                       accum)]))]
                 ;; Build stream of results of single transport step
                 ;; Recur on each element of single-step result stream
                 [new-geqns (for/stream ([r relabelers])
@@ -119,7 +165,7 @@
 ;;; The hash maps symbols (the names of sequence variables) to vectors of
 ;;; generator constants, except with #f appearing in positions where the GE does
 ;;; not require any specific constant.
-(define solution? (hash/c symbol? (vector/c (or/c gconst? false?))))
+(define solution? (hash/c symbol? (vectorof (or/c gconst? false?))))
 
 ;;; An EqvReln on some datatype T is a
 ;;;   [Listof [Set T]]
@@ -234,18 +280,23 @@
 ;;; and assuming they stand for the empty sequence.
 ;;; [List [GConst U Symbol]] [List [GConst U Symbol]]
 ;;; [[List [GConst U Symbol]] [List [GConst U Symbol]] -> [Stream T]]
+;;; T
 ;;; [T Solution -> T]
 ;;; -> [Stream T]
-(define (monoid-results left right semigroup-eqn->solns merge)
+(define (monoid-results left right semigroup-eqn->solns empty-soln merge)
   (define vars (set-union (for/set ([x left] #:when (symbol? x)) x)
                           (for/set ([x right] #:when (symbol? x)) x)))
   (define semigroup-solns   ; [Stream T]
     (for/fold ([all-solns (stream)])
               ([empties (subsets vars)])
+      (define new-left (for/list ([x left]  #:when (not (set-member? empties x))) x))
+      (define new-right (for/list ([x right] #:when (not (set-member? empties x))) x))
       (define more-solns    ; [Stream T]
-        (semigroup-eqn->solns
-         (for/list ([x left]  #:when (not (set-member? empties x))) x)
-         (for/list ([x right] #:when (not (set-member? empties x))) x)))
+        (if (and (empty? new-left) (empty? new-right))
+            ;; The empty sequence is not in the free semigroup, but it is in the
+            ;; free monoid and equal to itself. Use the provided empty solution.
+            (stream empty-soln)
+            (semigroup-eqn->solns new-left new-right)))
       (define empties-soln  ; Solution
         (for/hash ([x empties])
                   (values x (vector))))
@@ -258,7 +309,10 @@
 ;;; [List [GConst U Symbol]] [List [GConst U Symbol]] [Optional: GE -> Boolean]
 ;;; -> [Stream Solution]
 (define (solve-monoid-eqn* left right [prune admissible?])
-  (monoid-results left right (λ (l r) (solve-semigroup-eqn* l r prune)) hash-union))
+  (monoid-results left right
+                  (λ (l r) (solve-semigroup-eqn* l r prune))
+                  (hash)
+                  hash-union))
 ;;; Produce any solution for a free monoid equation (#f if none).
 ;;; [List [GConst U Symbol]] [List [GConst U Symbol]] [Optional: GE -> Boolean]
 ;;; -> Solution
@@ -270,6 +324,7 @@
 ;;; -> [Stream [List Solution [EqvReln GConst]]]
 (define (solve-monoid-eqn*/t left right)
   (monoid-results left right solve-semigroup-eqn*/t
+                  (list (hash) '())
                   (λ (soln/eqv empties)
                     (list (hash-union (first soln/eqv) empties)
                           (second soln/eqv)))))

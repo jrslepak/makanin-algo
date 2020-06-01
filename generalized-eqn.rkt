@@ -265,9 +265,13 @@
     #:when (or (not picky?)
                (and (alignable? left (map add1 (left-bounds bound-locs)))
                     (alignable? right (map add1 (right-bounds bound-locs))))))
-   (add-dummy-duals
-    (append (build-bases left (map add1 (left-bounds bound-locs)))
-            (build-bases right (map add1 (right-bounds bound-locs)))))))
+   (define next-ge
+     (sort
+      (add-dummy-duals
+       (append (build-bases left (map add1 (left-bounds bound-locs)))
+               (build-bases right (map add1 (right-bounds bound-locs)))))
+      ge-<=))
+   next-ge))
 (module+ test
   (check-equal?
    (stream->list (words->ge* (list 1 (svar 'x)) (list (svar 'x) 1)))
@@ -424,12 +428,14 @@
         (λ (b) (or (equal? b widened-carrier)
                    (equal? b widened-dual)))
         (λ (b) (equal? b widened-carrier))))
-  (sort (flatten (for/list ([base widened-ge])
-                           (cond [(erasable? base) (erase base)]
-                                 [(shiftable? base) (list (erase base)
-                                                          (shift base))]
-                                 [else base])))
-        ge-<=))
+  (define new-ge
+    (sort (flatten (for/list ([base widened-ge])
+                             (cond [(erasable? base) (erase base)]
+                                   [(shiftable? base) (list (erase base)
+                                                            (shift base))]
+                                   [else base])))
+          ge-<=))
+  new-ge)
 
 (module+ test
   (define GUTIERREZ-EXAMPLE-PG8 (ge [(S u) (1 3)]

@@ -86,7 +86,7 @@
 ;;;; how can we widen the dual zone by inserting new boundaries so that it
 ;;;; matches the carrier's width?
 
-;;; Enumerate end-preserving monotonic injections f from [0,m] to [0,n],
+;;; Enumerate end-preserving monotonic injections f from [0,m) to [0,n),
 ;;; that is, f(0)=0 and f(m)=n (note: if m>n, there are no such functions)
 ;;; Give each result as a list whose ith element is f(i)
 ;;; Natural Natural -> [Stream-of [List-of Natural]]
